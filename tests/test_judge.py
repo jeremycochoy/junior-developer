@@ -1,5 +1,5 @@
 import time
-from pairwise_judge import PairwiseJudge, JudgmentResult
+from junior_dev.judge import PairwiseJudge, JudgmentResult
 
 
 def test_initialization():
@@ -134,7 +134,7 @@ def test_integration_with_bt():
     print("TEST 8: Integration with BT-MM Engine")
     print("="*70)
     
-    from bt_scoring_engine import BTMMScoringEngine
+    from junior_dev.scoring import BTMMScoringEngine
     import tempfile
     from pathlib import Path
     

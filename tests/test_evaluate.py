@@ -1,40 +1,35 @@
-"""
-Quick test for evaluate.py without full ShinkaEvolve integration.
-"""
-
 import tempfile
 from pathlib import Path
-from evaluate import evaluate_coding_agent_prompt
+from junior_dev.shinka.evaluate import evaluate_coding_agent_prompt
 
-# Create temporary directories
 with tempfile.TemporaryDirectory() as tmpdir:
     results_dir = Path(tmpdir) / "results"
     results_dir.mkdir()
     
-    # Create a minimal test codebase
     codebase_dir = Path(tmpdir) / "test_codebase"
     codebase_dir.mkdir()
     
-    # Initialize git repo
     import subprocess
     subprocess.run(["git", "init"], cwd=codebase_dir, capture_output=True)
     subprocess.run(["git", "config", "user.email", "test@test.com"], cwd=codebase_dir)
     subprocess.run(["git", "config", "user.name", "Test User"], cwd=codebase_dir)
     
-    # Create initial file
     (codebase_dir / "main.py").write_text("print('Hello World')")
     subprocess.run(["git", "add", "."], cwd=codebase_dir)
     subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=codebase_dir)
     subprocess.run(["git", "branch", "-m", "master"], cwd=codebase_dir)
     
-    # Run evaluation
+    import junior_dev
+    package_dir = Path(junior_dev.__file__).parent
+    initial_path = package_dir / "shinka" / "initial.py"
+    
     print("Running evaluation test...")
     metrics = evaluate_coding_agent_prompt(
-        program_path="initial.py",
+        program_path=str(initial_path),
         results_dir=str(results_dir),
         target_codebase=str(codebase_dir),
         bt_db_path=str(Path(tmpdir) / "test_bt.db"),
-        num_comparisons=0,  # No comparisons for first run
+        num_comparisons=0,
         verbose=True
     )
     

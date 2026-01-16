@@ -27,7 +27,7 @@ class JudgmentResult:
 
 
 class PairwiseJudge:
-    def __init__(self, llm_model: str = "gpt-4", system_prompt: Optional[str] = None, 
+    def __init__(self, llm_model: str = "gpt-4o", system_prompt: Optional[str] = None, 
                  temperature: float = 0.0, max_tokens: int = 2000):
         self.llm_model = llm_model
         self.system_prompt = system_prompt or self._default_system_prompt()
@@ -67,16 +67,15 @@ Reasoning: [Your detailed explanation]"""
         first, second = (candidate_b, candidate_a) if swapped else (candidate_a, candidate_b)
         
         user_prompt = self._build_prompt(task_spec, first, second, context)
-        start_time = time.time()
         
         if self.llm:
-            response = self.llm.query(
-                msg=user_prompt,
-                system_msg=self.system_prompt,
-                llm_kwargs={'temperature': self.temperature, 'max_tokens': self.max_tokens}
-            )
-            llm_response = response.content
-            cost = response.cost if hasattr(response, 'cost') else 0.0
+            response = self.llm.query(msg=user_prompt, system_msg=self.system_prompt)
+            if response is None:
+                llm_response = self._mock_llm_response(first, second)
+                cost = 0.0
+            else:
+                llm_response = response.content
+                cost = response.cost if hasattr(response, 'cost') else 0.0
         else:
             llm_response = self._mock_llm_response(first, second)
             cost = 0.0

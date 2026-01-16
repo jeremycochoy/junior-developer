@@ -52,7 +52,6 @@ class ComparisonResult:
 
 def compute_bt_mm(candidates: List[str], comparisons: List[Tuple[str, str, float]], 
                   max_iter: int = 100, tol: float = 1e-6) -> Dict[str, float]:
-    """Bradley-Terry MM: θ_i = W_i / Σ_j (n_ij / (θ_i + θ_j))"""
     if not candidates:
         return {}
     
@@ -175,16 +174,13 @@ class BTMMScoringEngine:
         self._update_candidate(candidate_a, winner, 'a')
         self._update_candidate(candidate_b, winner, 'b')
         
-        # Store comparison BEFORE recomputing (so it's included in the calculation)
         self._store_comparison(candidate_a, candidate_b, winner, score_a_old, score_b_old, 
-                            score_a_old, score_b_old, reasoning)  # Use old scores temporarily
+                            score_a_old, score_b_old, reasoning)
         
-        # Now recompute with the new comparison included
         new_scores = self._recompute_all_scores()
         score_a_new = new_scores.get(candidate_a, score_a_old)
         score_b_new = new_scores.get(candidate_b, score_b_old)
         
-        # Update the comparison record with the actual new scores
         self.conn.execute(
             """UPDATE comparisons 
             SET score_a_after = ?, score_b_after = ?
@@ -325,7 +321,6 @@ class BTMMScoringEngine:
         )
     
     def _row_to_comparison(self, row) -> ComparisonResult:
-        """Convert database row to ComparisonResult, filtering out 'id' field."""
         return ComparisonResult(
             candidate_a=row['candidate_a'],
             candidate_b=row['candidate_b'],

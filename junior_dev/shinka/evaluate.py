@@ -7,8 +7,8 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Dict, Any
 
-from bt_scoring_engine import BTMMScoringEngine
-from pairwise_judge import PairwiseJudge
+from junior_dev.scoring import BTMMScoringEngine
+from junior_dev.judge import PairwiseJudge
 
 
 def evaluate_coding_agent_prompt(
@@ -17,19 +17,10 @@ def evaluate_coding_agent_prompt(
     target_codebase: str = "./example_codebase",
     task_spec: str = "Refactor and improve the code quality",
     bt_db_path: str = "./bt_scores.db",
-    llm_judge_model: str = "gpt-4",
+    llm_judge_model: str = "gpt-4o",
     num_comparisons: int = 3,
     verbose: bool = True,
 ):
-    """
-    Evaluate an evolved prompt by:
-    1. Loading the prompt from the program file
-    2. Executing a coding agent with that prompt
-    3. Comparing results against previous attempts using pairwise judge
-    4. Updating BT-MM scores
-    5. Returning the BT score as combined_score
-    """
-    
     spec = importlib.util.spec_from_file_location("program", program_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Could not load program from {program_path}")
@@ -42,7 +33,6 @@ def evaluate_coding_agent_prompt(
     correct = True
     
     try:
-        # Extract the evolved prompt and candidate ID from the program
         candidate_id = getattr(module, 'CANDIDATE_ID', Path(program_path).stem)
         evolved_prompt = module.get_evolved_prompt()
         
@@ -52,8 +42,6 @@ def evaluate_coding_agent_prompt(
             print(f"{'='*70}")
             print(f"Evolved Prompt:\n{evolved_prompt[:200]}...")
         
-        # Execute the coding agent with the prompt
-        # (This creates a git branch and applies changes)
         branch_name, changes_applied = execute_coding_agent(
             prompt=evolved_prompt,
             codebase_path=target_codebase,
@@ -63,11 +51,9 @@ def evaluate_coding_agent_prompt(
         if not changes_applied:
             print(f"Warning: No changes were applied by the coding agent")
         
-        # Initialize scoring systems
         engine = BTMMScoringEngine(db_path=bt_db_path)
         judge = PairwiseJudge(llm_model=llm_judge_model, temperature=0.0)
         
-        # Get previous candidates to compare against
         previous_candidates = engine.get_random_candidates(
             n=num_comparisons, 
             exclude=[candidate_id]
@@ -76,18 +62,14 @@ def evaluate_coding_agent_prompt(
         if verbose:
             print(f"\nRunning {len(previous_candidates)} pairwise comparisons...")
         
-        # Compare against previous candidates
-        total_cost = 0.0
         wins = 0
         losses = 0
         ties = 0
         
         for opponent_id in previous_candidates:
-            # Get diffs for both branches
             diff_current = get_git_diff("master", branch_name, target_codebase)
             diff_opponent = get_git_diff("master", f"candidate_{opponent_id}", target_codebase)
             
-            # Judge comparison
             winner, reasoning = judge.compare(
                 task_spec=task_spec,
                 candidate_a=diff_current,
@@ -95,7 +77,6 @@ def evaluate_coding_agent_prompt(
                 context={"branch_a": branch_name, "branch_b": f"candidate_{opponent_id}"}
             )
             
-            # Update BT-MM scores
             score_a, score_b = engine.record_comparison(
                 candidate_id, 
                 opponent_id, 
@@ -103,7 +84,6 @@ def evaluate_coding_agent_prompt(
                 reasoning
             )
             
-            # Track results
             if winner == 'a':
                 wins += 1
             elif winner == 'b':
@@ -114,15 +94,10 @@ def evaluate_coding_agent_prompt(
             if verbose:
                 print(f"  vs {opponent_id}: {winner} (scores: {score_a:.2f} vs {score_b:.2f})")
         
-        # Get final BT-MM score
         final_score = engine.get_score(candidate_id)
         stats = engine.get_stats(candidate_id)
-        
-        # Get judge statistics
         judge_stats = judge.get_statistics()
-        total_cost = judge_stats['total_cost']
         
-        # Compile metrics
         metrics = {
             "combined_score": float(final_score),
             "runtime": time.time() - start_t,
@@ -137,7 +112,7 @@ def evaluate_coding_agent_prompt(
                 "changes_applied": changes_applied,
             },
             "private": {
-                "evaluation_cost": total_cost,
+                "evaluation_cost": judge_stats['total_cost'],
                 "llm_calls": judge_stats['total_comparisons'],
             }
         }
@@ -164,7 +139,6 @@ def evaluate_coding_agent_prompt(
         error = str(e)
         correct = False
     
-    # Save results
     correct_file = os.path.join(results_dir, "correct.json")
     with open(correct_file, "w") as f:
         json.dump({"correct": correct, "error": error}, f, indent=4)
@@ -184,19 +158,11 @@ def evaluate_coding_agent_prompt(
 
 
 def execute_coding_agent(prompt: str, codebase_path: str, candidate_id: str) -> tuple[str, bool]:
-    """
-    Execute a coding agent with the given prompt.
-    Returns (branch_name, changes_applied).
-    
-    TODO: Implement actual coding agent integration (Aider, Claude Code, etc.)
-    For now, this is a stub that creates a branch.
-    """
     import subprocess
     
     branch_name = f"candidate_{candidate_id}"
     
     try:
-        # Create new branch from master
         subprocess.run(
             ["git", "checkout", "-b", branch_name, "master"],
             cwd=codebase_path,
@@ -204,18 +170,13 @@ def execute_coding_agent(prompt: str, codebase_path: str, candidate_id: str) -> 
             check=True
         )
         
-        # TODO: Call actual coding agent here
-        # Example: subprocess.run(["aider", "--message", prompt], cwd=codebase_path)
+        # TODO: Call actual coding agent (aider, claude-code, etc.)
+        # subprocess.run(["aider", "--message", prompt], cwd=codebase_path)
         
-        # For now, just create a placeholder commit
         placeholder_file = Path(codebase_path) / f".evolution_{candidate_id}.txt"
         placeholder_file.write_text(f"Evolution step: {candidate_id}\nPrompt: {prompt}")
         
-        subprocess.run(
-            ["git", "add", "."],
-            cwd=codebase_path,
-            capture_output=True
-        )
+        subprocess.run(["git", "add", "."], cwd=codebase_path, capture_output=True)
         
         result = subprocess.run(
             ["git", "commit", "-m", f"Evolution: {candidate_id}"],
@@ -223,9 +184,7 @@ def execute_coding_agent(prompt: str, codebase_path: str, candidate_id: str) -> 
             capture_output=True
         )
         
-        changes_applied = result.returncode == 0
-        
-        return branch_name, changes_applied
+        return branch_name, result.returncode == 0
         
     except subprocess.CalledProcessError as e:
         print(f"Git error: {e}")
@@ -233,11 +192,6 @@ def execute_coding_agent(prompt: str, codebase_path: str, candidate_id: str) -> 
 
 
 def get_git_diff(base_branch: str, compare_branch: str, codebase_path: str) -> str:
-    """
-    Get the diff between two branches.
-    
-    TODO: Implement with proper git utilities.
-    """
     import subprocess
     
     try:

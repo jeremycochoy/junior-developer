@@ -2,7 +2,7 @@ import time
 import tempfile
 import json
 from pathlib import Path
-from bt_scoring_engine import BTMMScoringEngine, BTStats, ComparisonResult
+from elo_scoring_engine import ELOScoringEngine, ELOStats, ComparisonResult
 
 
 def test_initialization():
@@ -13,14 +13,15 @@ def test_initialization():
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
         
-        engine = BTMMScoringEngine(
+        engine = ELOScoringEngine(
             db_path=str(db_path),
-            convergence_tol=1e-6,
-            max_iterations=100
+            k_factor=32.0,
+            initial_elo=1500.0,
+            verbose=True
         )
         
-        assert engine.convergence_tol == 1e-6
-        assert engine.max_iterations == 100
+        assert engine.k_factor == 32.0
+        assert engine.initial_elo == 1500.0
         assert engine.db_path.exists()
         
         engine.close()
@@ -28,44 +29,48 @@ def test_initialization():
     print("✓ Initialization test passed\n")
 
 
-def test_basic_bt_calculations():
+def test_basic_elo_calculations():
+    """Test basic ELO score updates."""
     print("\n" + "="*70)
-    print("TEST 2: Basic BT-MM Score Calculations")
+    print("TEST 2: Basic ELO Calculations")
     print("="*70)
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nInitializing candidates...")
         candidates = ["prog_a", "prog_b", "prog_c"]
         for cand in candidates:
-            score = engine.get_score(cand)
-            print(f"  {cand}: {score:.2f}")
-            assert score == 1.0, f"Expected 1.0, got {score}"
+            elo = engine.get_elo(cand)
+            print(f"  {cand}: {elo:.1f}")
+            assert elo == 1500.0, f"Expected 1500.0, got {elo}"
         
-        print("\nTest: A (1.0) vs B (1.0) -> A wins")
-        score_a, score_b = engine.record_comparison("prog_a", "prog_b", "a", "A is better")
-        print(f"  Result: A={score_a:.2f}, B={score_b:.2f}")
-        assert score_a > score_b, "Winner should have higher score"
+        print("\nTest: A (1500) vs B (1500) -> A wins")
+        elo_a, elo_b = engine.record_comparison("prog_a", "prog_b", "a", "A is better")
+        print(f"  Result: A={elo_a:.1f}, B={elo_b:.1f}")
+        assert elo_a > 1500.0, "Winner should gain points"
+        assert elo_b < 1500.0, "Loser should lose points"
+        assert abs((elo_a - 1500.0) + (elo_b - 1500.0)) < 0.01, "Points should be conserved"
         
-        print("\nTest: C vs B -> C wins")
-        score_c, score_b2 = engine.record_comparison("prog_c", "prog_b", "a", "C is better")
-        print(f"  Result: C={score_c:.2f}, B={score_b2:.2f}")
-        assert score_c > score_b2
+        print("\nTest: C (1500) vs B vs C wins")
+        elo_c, elo_b2 = engine.record_comparison("prog_c", "prog_b", "a", "C is better")
+        print(f"  Result: C={elo_c:.1f}, B={elo_b2:.1f}")
+        assert elo_c > 1500.0
+        assert elo_b2 < elo_b  # B loses again
         
         print("\nTest: A vs C -> Tie")
-        score_a2, score_c2 = engine.record_comparison("prog_a", "prog_c", "tie", "Both equal")
-        print(f"  Result: A={score_a2:.2f}, C={score_c2:.2f}")
+        elo_a2, elo_c2 = engine.record_comparison("prog_a", "prog_c", "tie", "Both equal")
+        print(f"  Result: A={elo_a2:.1f}, C={elo_c2:.1f}")
         
         print("\nFinal Rankings:")
         rankings = engine.get_rankings()
-        for rank, (cand, score, stats) in enumerate(rankings, 1):
-            print(f"  {rank}. {cand}: {score:.2f} ({stats['wins']}W-{stats['losses']}L-{stats['ties']}T)")
+        for rank, (cand, elo, stats) in enumerate(rankings, 1):
+            print(f"  {rank}. {cand}: {elo:.1f} ({stats['wins']}W-{stats['losses']}L-{stats['ties']}T)")
         
         engine.close()
         
-    print("✓ Basic BT-MM calculations test passed\n")
+    print("✓ Basic ELO calculations test passed\n")
 
 
 def test_comparison_caching():
@@ -75,10 +80,10 @@ def test_comparison_caching():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nFirst comparison: A vs B")
-        score_a1, score_b1 = engine.record_comparison("prog_a", "prog_b", "a")
+        elo_a1, elo_b1 = engine.record_comparison("prog_a", "prog_b", "a")
         
         print("\nChecking cache...")
         assert engine.comparison_exists("prog_a", "prog_b"), "Should be cached"
@@ -86,12 +91,12 @@ def test_comparison_caching():
         
         cached = engine.get_comparison("prog_a", "prog_b")
         assert cached is not None
-        print(f"  Cached result: {cached.winner}")
+        print(f"  Cached result: {cached.winner}, ELO changes: {cached.elo_a_after - cached.elo_a_before:.1f}")
         
         print("\nAttempting duplicate comparison...")
-        score_a2, score_b2 = engine.record_comparison("prog_a", "prog_b", "b")
-        assert score_a2 == score_a1, "Score should not change on duplicate"
-        assert score_b2 == score_b1, "Score should not change on duplicate"
+        elo_a2, elo_b2 = engine.record_comparison("prog_a", "prog_b", "b")  # Different winner!
+        assert elo_a2 == elo_a1, "ELO should not change on duplicate"
+        assert elo_b2 == elo_b1, "ELO should not change on duplicate"
         
         engine.close()
         
@@ -105,18 +110,18 @@ def test_statistics_tracking():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nRunning mini tournament...")
-        engine.record_comparison("a", "b", "a")
-        engine.record_comparison("a", "c", "a")
-        engine.record_comparison("a", "d", "tie")
-        engine.record_comparison("b", "c", "b")
+        engine.record_comparison("a", "b", "a")  # A wins
+        engine.record_comparison("a", "c", "a")  # A wins
+        engine.record_comparison("a", "d", "tie")  # A ties
+        engine.record_comparison("b", "c", "b")  # B wins
         
         print("\nChecking stats for 'a':")
         stats = engine.get_stats("a")
         assert stats is not None
-        print(f"  Score: {stats.bt_score:.2f}")
+        print(f"  ELO: {stats.elo_score:.1f}")
         print(f"  Record: {stats.wins}W-{stats.losses}L-{stats.ties}T")
         print(f"  Win Rate: {stats.win_rate:.1%}")
         print(f"  Comparisons: {stats.num_comparisons}")
@@ -125,6 +130,7 @@ def test_statistics_tracking():
         assert stats.losses == 0, f"Expected 0 losses, got {stats.losses}"
         assert stats.ties == 1, f"Expected 1 tie, got {stats.ties}"
         assert stats.num_comparisons == 3, f"Expected 3 comparisons, got {stats.num_comparisons}"
+        assert 0.8 < stats.win_rate < 0.9, f"Win rate should be ~0.833, got {stats.win_rate}"
         
         engine.close()
         
@@ -138,8 +144,8 @@ def test_rankings_and_filtering():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
-        
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
+
         print("\nCreating tournament...")
         engine.record_comparison("champion", "player1", "a")
         engine.record_comparison("champion", "player2", "a")
@@ -157,15 +163,15 @@ def test_rankings_and_filtering():
         
         print("\nTop 3 rankings:")
         top_3 = engine.get_rankings(top_n=3)
-        for rank, (cand, score, stats) in enumerate(top_3, 1):
-            print(f"  {rank}. {cand}: {score:.2f}")
+        for rank, (cand, elo, stats) in enumerate(top_3, 1):
+            print(f"  {rank}. {cand}: {elo:.1f}")
         assert len(top_3) == 3
         assert top_3[0][0] == "champion", "Champion should be #1"
         
         print("\nCandidates with at least 2 comparisons:")
         filtered = engine.get_rankings(min_comparisons=2)
         print(f"  Found {len(filtered)} candidates")
-        for cand, score, stats in filtered:
+        for cand, elo, stats in filtered:
             print(f"    {cand}: {stats['comparisons']} comparisons")
             assert stats['comparisons'] >= 2
         
@@ -181,11 +187,11 @@ def test_random_sampling():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nCreating 10 candidates...")
         for i in range(10):
-            engine.get_score(f"prog_{i}")
+            engine.get_elo(f"prog_{i}")
         
         print("\nSampling 5 random candidates:")
         sample = engine.get_random_candidates(n=5)
@@ -197,6 +203,8 @@ def test_random_sampling():
         sample = engine.get_random_candidates(n=3, exclude=[f"prog_{i}" for i in range(5)])
         print(f"  {sample}")
         assert len(sample) == 3
+        for cand in sample:
+            assert not cand.startswith("prog_0") and not cand.startswith("prog_1")
         
         engine.close()
         
@@ -210,11 +218,11 @@ def test_comparison_history():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nCreating comparison history for 'prog_a'...")
         engine.record_comparison("prog_a", "prog_b", "a", "A wins round 1")
-        time.sleep(0.01)
+        time.sleep(0.01)  # Small delay for timestamp difference
         engine.record_comparison("prog_a", "prog_c", "tie", "Tie round 2")
         time.sleep(0.01)
         engine.record_comparison("prog_a", "prog_d", "b", "A loses round 3")
@@ -240,7 +248,7 @@ def test_export_import():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nCreating test data...")
         engine.record_comparison("a", "b", "a")
@@ -253,7 +261,7 @@ def test_export_import():
         print(f"\nExport summary:")
         print(f"  Total candidates: {data['metadata']['total_candidates']}")
         print(f"  Total comparisons: {data['metadata']['total_comparisons']}")
-        print(f"  Algorithm: {data['metadata']['algorithm']}")
+        print(f"  K-factor: {data['metadata']['k_factor']}")
         
         export_file = Path(tmpdir) / "export.json"
         with open(export_file, 'w') as f:
@@ -279,7 +287,7 @@ def test_edge_cases():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=True)
         
         print("\nTest: Invalid winner value")
         try:
@@ -289,28 +297,28 @@ def test_edge_cases():
             print(f"  ✓ Correctly raised ValueError: {e}")
         
         print("\nTest: Self-comparison")
-        score_before = engine.get_score("self")
-        score_a, score_b = engine.record_comparison("self", "self", "tie")
-        print(f"  Self vs Self: {score_before:.2f} → {score_a:.2f}")
+        elo_before = engine.get_elo("self")
+        elo_a, elo_b = engine.record_comparison("self", "self", "tie")
+        print(f"  Self vs Self: {elo_before:.1f} → {elo_a:.1f}")
+        assert abs(elo_a - elo_before) < 1.0
         
         print("\nTest: Empty candidate ID")
-        score = engine.get_score("")
-        print(f"  Empty string score: {score:.2f}")
-        assert score == 1.0
+        elo = engine.get_elo("")
+        print(f"  Empty string ELO: {elo:.1f}")
+        assert elo == 1500.0
         
         print("\nTest: Very long candidate ID")
         long_id = "x" * 1000
-        score = engine.get_score(long_id)
-        print(f"  Long ID score: {score:.2f}")
-        assert score == 1.0
-        
+        elo = engine.get_elo(long_id)
+        print(f"  Long ID ELO: {elo:.1f}")
+        assert elo == 1500.0
+
         print("\nTest: Non-existent candidate stats")
         stats = engine.get_stats("does_not_exist")
         assert stats is None
         print("  ✓ Correctly returned None")
         
-        print("\nTest: Rankings with no candidates")
-        engine_empty = BTMMScoringEngine(db_path=str(Path(tmpdir) / "empty.db"))
+        engine_empty = ELOScoringEngine(db_path=str(Path(tmpdir) / "empty.db"))
         rankings = engine_empty.get_rankings()
         assert len(rankings) == 0
         print("  ✓ Empty rankings work correctly")
@@ -328,31 +336,28 @@ def test_performance():
     
     with tempfile.TemporaryDirectory() as tmpdir:
         db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine = ELOScoringEngine(db_path=str(db_path), verbose=False)
         
-        n_candidates = 50
+        n_candidates = 100
         print(f"\nCreating {n_candidates} candidates...")
         start = time.time()
         for i in range(n_candidates):
-            engine.get_score(f"prog_{i:03d}")
+            engine.get_elo(f"prog_{i:03d}")
         elapsed = time.time() - start
         print(f"  Time: {elapsed:.3f}s ({n_candidates/elapsed:.0f} candidates/s)")
         
-        n_comparisons = 200
+        n_comparisons = 500
         print(f"\nRunning {n_comparisons} comparisons...")
-        print("  (Note: BT-MM recomputes all scores after each comparison)")
         start = time.time()
         import random
-        comparisons_done = 0
         for _ in range(n_comparisons):
             a = f"prog_{random.randint(0, n_candidates-1):03d}"
             b = f"prog_{random.randint(0, n_candidates-1):03d}"
             if a != b and not engine.comparison_exists(a, b):
                 winner = random.choice(["a", "b", "tie"])
                 engine.record_comparison(a, b, winner)
-                comparisons_done += 1
         elapsed = time.time() - start
-        print(f"  Time: {elapsed:.3f}s ({comparisons_done/elapsed:.1f} comparisons/s)")
+        print(f"  Time: {elapsed:.3f}s ({n_comparisons/elapsed:.0f} comparisons/s)")
         
         print(f"\nQuerying rankings...")
         start = time.time()
@@ -372,45 +377,14 @@ def test_performance():
     print("✓ Performance test passed\n")
 
 
-def test_mm_convergence():
-    print("\n" + "="*70)
-    print("TEST 11: MM Algorithm Convergence")
-    print("="*70)
-    
-    with tempfile.TemporaryDirectory() as tmpdir:
-        db_path = Path(tmpdir) / "test.db"
-        engine = BTMMScoringEngine(db_path=str(db_path), max_iterations=1000, convergence_tol=1e-8)
-        
-        print("\nCreating consistent tournament (A>B>C>D in a chain)...")
-        engine.record_comparison("a", "b", "a")
-        engine.record_comparison("b", "c", "a")
-        engine.record_comparison("c", "d", "a")
-        
-        print("\nRankings after consistent results:")
-        rankings = engine.get_rankings()
-        for rank, (cand, score, stats) in enumerate(rankings, 1):
-            print(f"  {rank}. {cand}: {score:.4f}")
-        
-        assert rankings[0][0] == "a", "A should be ranked first"
-        assert rankings[1][0] == "b", "B should be ranked second"
-        assert rankings[2][0] == "c", "C should be ranked third"
-        assert rankings[3][0] == "d", "D should be ranked fourth"
-        
-        print("\nScore ordering verified!")
-        
-        engine.close()
-        
-    print("✓ MM convergence test passed\n")
-
-
 def run_all_tests():
     print("\n" + "="*70)
-    print("BT-MM SCORING ENGINE - COMPREHENSIVE TEST SUITE")
+    print("ELO SCORING ENGINE - COMPREHENSIVE TEST SUITE")
     print("="*70)
     
     tests = [
         test_initialization,
-        test_basic_bt_calculations,
+        test_basic_elo_calculations,
         test_comparison_caching,
         test_statistics_tracking,
         test_rankings_and_filtering,
@@ -419,7 +393,6 @@ def run_all_tests():
         test_export_import,
         test_edge_cases,
         test_performance,
-        test_mm_convergence,
     ]
     
     passed = 0
