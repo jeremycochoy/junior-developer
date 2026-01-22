@@ -1,0 +1,20 @@
+coding_agent:
+  agent_type: "aider"
+  timeout: 300
+  working_dir: null
+
+git:
+  default_branch: "master"
+  auto_cleanup: false
+  branch_prefix: "candidate_"
+
+evaluation:
+  num_comparisons: 3
+  llm_judge_model: "gpt-4o"
+  task_spec: "Refactor and improve code quality"
+
+scoring:
+  db_path: "./bt_scores.db"
+  convergence_tol: 1e-6
+  max_iterations: 100
+

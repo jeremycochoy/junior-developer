@@ -9,18 +9,32 @@ from typing import Optional, Dict, Any
 
 from junior_dev.scoring import BTMMScoringEngine
 from junior_dev.judge import PairwiseJudge
+from junior_dev.git_manager import GitManager
+from junior_dev.coding_agent import CodingAgent, AgentResult
+from junior_dev.config import load_config, get_config_value
 
 
 def evaluate_coding_agent_prompt(
     program_path: str,
     results_dir: str,
     target_codebase: str = "./example_codebase",
-    task_spec: str = "Refactor and improve the code quality",
-    bt_db_path: str = "./bt_scores.db",
-    llm_judge_model: str = "gpt-4o",
-    num_comparisons: int = 3,
+    task_spec: Optional[str] = None,
+    bt_db_path: Optional[str] = None,
+    llm_judge_model: Optional[str] = None,
+    num_comparisons: Optional[int] = None,
+    agent_type: Optional[str] = None,
+    agent_timeout: Optional[int] = None,
     verbose: bool = True,
+    config_path: Optional[str] = None,
 ):
+    config = load_config(config_path)
+    
+    task_spec = task_spec or get_config_value(config, "evaluation.task_spec", "Refactor and improve the code quality")
+    bt_db_path = bt_db_path or get_config_value(config, "scoring.db_path", "./bt_scores.db")
+    llm_judge_model = llm_judge_model or get_config_value(config, "evaluation.llm_judge_model", "gpt-4o")
+    num_comparisons = num_comparisons if num_comparisons is not None else get_config_value(config, "evaluation.num_comparisons", 3)
+    agent_type = agent_type or get_config_value(config, "coding_agent.agent_type", "aider")
+    agent_timeout = agent_timeout if agent_timeout is not None else get_config_value(config, "coding_agent.timeout", 300)
     spec = importlib.util.spec_from_file_location("program", program_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Could not load program from {program_path}")
@@ -42,14 +56,29 @@ def evaluate_coding_agent_prompt(
             print(f"{'='*70}")
             print(f"Evolved Prompt:\n{evolved_prompt[:200]}...")
         
-        branch_name, changes_applied = execute_coding_agent(
-            prompt=evolved_prompt,
-            codebase_path=target_codebase,
-            candidate_id=candidate_id,
-        )
+        git_manager = GitManager(target_codebase)
+        working_dir = get_config_value(config, "coding_agent.working_dir") or target_codebase
+        coding_agent = CodingAgent(agent_type=agent_type, timeout=agent_timeout, working_dir=working_dir)
         
-        if not changes_applied:
-            print(f"Warning: No changes were applied by the coding agent")
+        branch_prefix = get_config_value(config, "git.branch_prefix", "candidate_")
+        default_branch = get_config_value(config, "git.default_branch", "master")
+        branch_name = f"{branch_prefix}{candidate_id}"
+        
+        if not git_manager.create_branch(branch_name, from_branch=default_branch):
+            if verbose:
+                print(f"Branch {branch_name} already exists, checking it out...")
+            git_manager.checkout_branch(branch_name)
+        
+        agent_result = coding_agent.execute(prompt=evolved_prompt)
+        
+        if not agent_result.success:
+            print(f"Warning: Coding agent failed: {agent_result.error}")
+        
+        if agent_result.changes_made:
+            git_manager.stage_all()
+            git_manager.commit(f"Evolution: {candidate_id}", allow_empty=False)
+        
+        changes_applied = agent_result.changes_made
         
         engine = BTMMScoringEngine(db_path=bt_db_path)
         judge = PairwiseJudge(llm_model=llm_judge_model, temperature=0.0)
@@ -67,8 +96,14 @@ def evaluate_coding_agent_prompt(
         ties = 0
         
         for opponent_id in previous_candidates:
-            diff_current = get_git_diff("master", branch_name, target_codebase)
-            diff_opponent = get_git_diff("master", f"candidate_{opponent_id}", target_codebase)
+            opponent_branch = f"{branch_prefix}{opponent_id}"
+            if not git_manager.branch_exists(opponent_branch):
+                if verbose:
+                    print(f"  Skipping {opponent_id}: branch {opponent_branch} does not exist")
+                continue
+            
+            diff_current = git_manager.get_diff(default_branch, branch_name)
+            diff_opponent = git_manager.get_diff(default_branch, opponent_branch)
             
             winner, reasoning = judge.compare(
                 task_spec=task_spec,
@@ -157,55 +192,6 @@ def evaluate_coding_agent_prompt(
     return metrics
 
 
-def execute_coding_agent(prompt: str, codebase_path: str, candidate_id: str) -> tuple[str, bool]:
-    import subprocess
-    
-    branch_name = f"candidate_{candidate_id}"
-    
-    try:
-        subprocess.run(
-            ["git", "checkout", "-b", branch_name, "master"],
-            cwd=codebase_path,
-            capture_output=True,
-            check=True
-        )
-        
-        # TODO: Call actual coding agent (aider, claude-code, etc.)
-        # subprocess.run(["aider", "--message", prompt], cwd=codebase_path)
-        
-        placeholder_file = Path(codebase_path) / f".evolution_{candidate_id}.txt"
-        placeholder_file.write_text(f"Evolution step: {candidate_id}\nPrompt: {prompt}")
-        
-        subprocess.run(["git", "add", "."], cwd=codebase_path, capture_output=True)
-        
-        result = subprocess.run(
-            ["git", "commit", "-m", f"Evolution: {candidate_id}"],
-            cwd=codebase_path,
-            capture_output=True
-        )
-        
-        return branch_name, result.returncode == 0
-        
-    except subprocess.CalledProcessError as e:
-        print(f"Git error: {e}")
-        return branch_name, False
-
-
-def get_git_diff(base_branch: str, compare_branch: str, codebase_path: str) -> str:
-    import subprocess
-    
-    try:
-        result = subprocess.run(
-            ["git", "diff", f"{base_branch}..{compare_branch}"],
-            cwd=codebase_path,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        print(f"Error getting diff: {e}")
-        return f"Error: Could not get diff between {base_branch} and {compare_branch}"
 
 
 if __name__ == "__main__":
@@ -254,6 +240,24 @@ if __name__ == "__main__":
         default=3,
         help="Number of pairwise comparisons per evaluation"
     )
+    parser.add_argument(
+        "--agent_type",
+        type=str,
+        default="aider",
+        help="Coding agent type (aider, claude-code, mock)"
+    )
+    parser.add_argument(
+        "--agent_timeout",
+        type=int,
+        default=None,
+        help="Timeout for coding agent execution in seconds (overrides config)"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config YAML file (default: configs/agent_config.yaml)"
+    )
     
     args = parser.parse_args()
     Path(args.results_dir).mkdir(parents=True, exist_ok=True)
@@ -266,5 +270,8 @@ if __name__ == "__main__":
         bt_db_path=args.bt_db_path,
         llm_judge_model=args.llm_judge_model,
         num_comparisons=args.num_comparisons,
+        agent_type=args.agent_type,
+        agent_timeout=args.agent_timeout,
+        config_path=args.config,
     )
 
