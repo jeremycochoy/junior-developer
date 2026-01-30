@@ -61,7 +61,7 @@ def run_once(
 
     print(f"[INFO] Initializing {agent_type} agent...")
     agent = CodingAgent(agent_type=agent_type, timeout=timeout, working_dir=str(repo), agent_args=agent_args)
-    if agent_type != "mock" and not agent.check_agent_available():
+    if not agent.check_agent_available():
         print(f"AGENT NOT AVAILABLE: {agent_type}")
         print("Install the agent binary and ensure it is in PATH.")
         return 4
@@ -139,7 +139,7 @@ def main() -> int:
     p = argparse.ArgumentParser(description="Example test for coding agents (Git + CodingAgent)")
     p.add_argument("--repo", type=str, default="", help=f"Path to a git repo (if empty, uses {default_repo})")
     p.add_argument("--base-branch", type=str, default="master")
-    p.add_argument("--agent-type", type=str, default="mock", help="mock / aider / claude-code")
+    p.add_argument("--agent-type", type=str, default="pipeline", help="pipeline (only supported type)")
     p.add_argument("--timeout", type=int, default=120)
     p.add_argument("--candidate-id", type=str, default="")
     p.add_argument("--prompt", type=str, default="Update the greet() function in example.py to return 'Hello, {name}! How are you?' instead of 'Hello, {name}!'.")

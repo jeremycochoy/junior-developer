@@ -16,8 +16,8 @@ def main():
     parser.add_argument(
         "--agent-type",
         type=str,
-        default="mock",
-        help="Agent type: mock, aider, or claude-code"
+        default="pipeline",
+        help="Agent type: pipeline (only supported type)"
     )
     parser.add_argument(
         "--agent-timeout",

@@ -1,11 +1,12 @@
 import subprocess
-import shutil
+import os
 import sys
 import threading
 import time
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
+
 
 @dataclass
 class AgentResult:
@@ -17,171 +18,138 @@ class AgentResult:
     changes_made: bool
 
 
+def _project_root() -> Path:
+    return Path(__file__).resolve().parent.parent
+
+
+def _pipeline_env(agents_dir: Path, backend: str) -> Dict[str, str]:
+    env = dict(os.environ)
+    env["AGENT_BACKEND"] = backend
+    env["AGENTS_DIR"] = str(agents_dir)
+    env["PATH"] = os.path.expanduser("~/.local/bin") + os.pathsep + env.get("PATH", "")
+    return env
+
+
+def _read_stream(pipe, lines: List[str], file=sys.stdout):
+    for line in iter(pipe.readline, ""):
+        print(line, end="", flush=True, file=file)
+        lines.append(line)
+    pipe.close()
+
+
 class CodingAgent:
     def __init__(
         self,
-        agent_type: str = "aider",
-        timeout: int = 300,
+        agent_type: str = "pipeline",
+        timeout: int = 600,
         working_dir: Optional[str] = None,
-        agent_args: Optional[list[str]] = None,
+        agent_args: Optional[List[str]] = None,
+        agents_dir: Optional[str] = None,
+        pipeline_backend: Optional[str] = None,
     ):
+        if agent_type != "pipeline":
+            raise ValueError(f"Only 'pipeline' agent type is supported. Got: {agent_type}")
+
         self.agent_type = agent_type
         self.timeout = timeout
         self.working_dir = Path(working_dir) if working_dir else None
         self.agent_args = agent_args or []
-        
-        self.supported_agents = {
-            "aider": self._run_aider,
-            "claude-code": self._run_claude_code,
-            "cursor": self._run_cursor,
-            "mock": self._run_mock,
-        }
-        
-        if agent_type not in self.supported_agents:
-            raise ValueError(f"Unsupported agent type: {agent_type}. Choose from: {list(self.supported_agents.keys())}")
-    
-    def execute(self, prompt: str, files: Optional[list] = None) -> AgentResult:
-        start_time = time.time()
-        
-        try:
-            result_func = self.supported_agents[self.agent_type]
-            success, output, error, exit_code, changes = result_func(prompt, files)
-            
-            execution_time = time.time() - start_time
-            
-            return AgentResult(
-                success=success,
-                output=output,
-                error=error,
-                execution_time=execution_time,
-                exit_code=exit_code,
-                changes_made=changes
-            )
-        except Exception as e:
-            execution_time = time.time() - start_time
-            return AgentResult(
-                success=False,
-                output="",
-                error=str(e),
-                execution_time=execution_time,
-                exit_code=-1,
-                changes_made=False
-            )
-    
-    def _run_aider(self, prompt: str, files: Optional[list] = None) -> Tuple[bool, str, str, int, bool]:
-        cmd = ["aider", "--no-gitignore", *self.agent_args, "--message", prompt]
-        
-        if files:
-            cmd.extend(files)
-        
-        try:
-            process = subprocess.Popen(
-                cmd,
-                cwd=str(self.working_dir) if self.working_dir else None,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1
-            )
-            
-            stdout_lines = []
-            stderr_lines = []
-            
-            def read_stdout():
-                for line in process.stdout:
-                    print(line, end='', flush=True)
-                    stdout_lines.append(line)
-            
-            def read_stderr():
-                for line in process.stderr:
-                    print(line, end='', flush=True, file=sys.stderr)
-                    stderr_lines.append(line)
-            
-            stdout_thread = threading.Thread(target=read_stdout, daemon=True)
-            stderr_thread = threading.Thread(target=read_stderr, daemon=True)
-            stdout_thread.start()
-            stderr_thread.start()
-            
-            start_time = time.time()
-            while process.poll() is None:
-                if time.time() - start_time > self.timeout:
-                    process.kill()
-                    stdout_thread.join(timeout=1)
-                    stderr_thread.join(timeout=1)
-                    return False, "", f"Agent execution timed out after {self.timeout}s", -1, False
-                time.sleep(0.1)
-            
-            returncode = process.poll()
-            stdout_thread.join(timeout=2)
-            stderr_thread.join(timeout=2)
-            
-            output = ''.join(stdout_lines)
-            error = ''.join(stderr_lines)
-            success = returncode == 0
-            changes = "No changes" not in output and returncode == 0
-            
-            return success, output, error, returncode, changes
-        except FileNotFoundError:
-            return False, "", "aider not found. Install with: pip install aider-chat", -1, False
-    
-    def _run_claude_code(self, prompt: str, files: Optional[list] = None) -> Tuple[bool, str, str, int, bool]:
-        cmd = ["claude-code", *self.agent_args, "--prompt", prompt]
-        
-        if files:
-            cmd.extend(["--files"] + files)
-        
-        try:
-            result = subprocess.run(
-                cmd,
-                cwd=str(self.working_dir) if self.working_dir else None,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-                check=False
-            )
-            
-            return result.returncode == 0, result.stdout, result.stderr, result.returncode, result.returncode == 0
-        except subprocess.TimeoutExpired:
-            return False, "", f"Agent execution timed out after {self.timeout}s", -1, False
-        except FileNotFoundError:
-            return False, "", "claude-code not found in PATH", -1, False
-    
-    def _run_cursor(self, prompt: str, files: Optional[list] = None) -> Tuple[bool, str, str, int, bool]:
-        return False, "", "Cursor agent integration not yet implemented", -1, False
-    
-    def _run_mock(self, prompt: str, files: Optional[list] = None) -> Tuple[bool, str, str, int, bool]:
-        if not self.working_dir:
-            return False, "", "mock agent requires working_dir", -1, False
+        self.agents_dir = Path(agents_dir) if agents_dir else None
+        self.pipeline_backend = pipeline_backend
 
-        marker = self.working_dir / ".junior_dev_mock_change.txt"
-        marker.write_text(
-            "milestone2 mock agent change\n"
-            f"timestamp: {time.time()}\n"
-            f"prompt: {prompt}\n"
+    def execute(self, prompt: str, files: Optional[List] = None) -> AgentResult:
+        start = time.time()
+        try:
+            success, output, error, exit_code, changes = self._run_pipeline(prompt, files)
+        except Exception as e:
+            success, output, error, exit_code, changes = False, "", str(e), -1, False
+
+        return AgentResult(
+            success=success,
+            output=output,
+            error=error,
+            execution_time=time.time() - start,
+            exit_code=exit_code,
+            changes_made=changes,
         )
 
-        return True, f"Mock agent wrote {marker.name}", "", 0, True
-    
     def check_agent_available(self) -> bool:
-        if self.agent_type == "mock":
-            return True
-        
-        agent_binary = None
-        if self.agent_type == "aider":
-            agent_binary = shutil.which("aider")
-        elif self.agent_type == "claude-code":
-            agent_binary = shutil.which("claude-code")
-        
-        if not agent_binary:
-            return False
-        
-        try:
-            result = subprocess.run(
-                [agent_binary, "--version"],
-                capture_output=True,
-                timeout=5
-            )
-            return result.returncode == 0
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            return False
+        return self._pipeline_script() is not None
 
+    def _agents_dir(self) -> Path:
+        if self.agents_dir is None:
+            return _project_root() / ".agents"
+        return self.agents_dir if self.agents_dir.is_absolute() else _project_root() / self.agents_dir
+
+    def _pipeline_script(self) -> Optional[Path]:
+        script = self._agents_dir() / "run_pipeline.sh"
+        if script.is_file() and os.access(script, os.X_OK):
+            return script
+        return None
+
+    def _backend(self) -> str:
+        if self.pipeline_backend:
+            return self.pipeline_backend
+        for i, arg in enumerate(self.agent_args):
+            if arg == "--backend" and i + 1 < len(self.agent_args):
+                return self.agent_args[i + 1]
+            if arg.startswith("--backend="):
+                return arg.split("=", 1)[1]
+        return os.getenv("AGENT_BACKEND", "cursor")
+
+    def _run_pipeline(self, prompt: str, files: Optional[List] = None) -> Tuple[bool, str, str, int, bool]:
+        if not self.working_dir:
+            return False, "", "pipeline agent requires working_dir", -1, False
+
+        script = self._pipeline_script()
+        if not script:
+            return False, "", f"Pipeline script not found or not executable: {self._agents_dir() / 'run_pipeline.sh'}", -1, False
+
+        env = _pipeline_env(self._agents_dir(), self._backend())
+        cmd = ["bash", str(script), prompt]
+
+        try:
+            exit_code, output, err = self._run_cmd(cmd, str(self.working_dir), env)
+            success = exit_code == 0
+            changes = self._git_has_changes() if success else False
+            return success, output, err, exit_code, changes
+        except Exception as e:
+            return False, "", str(e), -1, False
+
+    def _run_cmd(self, cmd: List[str], cwd: str, env: Dict[str, str]) -> Tuple[int, str, str]:
+        process = subprocess.Popen(
+            cmd, cwd=cwd, env=env,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, bufsize=1,
+        )
+        out_lines = []
+        err_lines = []
+        t_out = threading.Thread(target=_read_stream, args=(process.stdout, out_lines), daemon=True)
+        t_err = threading.Thread(target=_read_stream, args=(process.stderr, err_lines), kwargs={"file": sys.stderr}, daemon=True)
+        t_out.start()
+        t_err.start()
+
+        start = time.time()
+        while process.poll() is None:
+            if time.time() - start > self.timeout:
+                process.kill()
+                t_out.join(timeout=1)
+                t_err.join(timeout=1)
+                return -1, "".join(out_lines), f"Pipeline execution timed out after {self.timeout}s"
+            time.sleep(0.1)
+
+        t_out.join(timeout=2)
+        t_err.join(timeout=2)
+        return process.returncode or 0, "".join(out_lines), "".join(err_lines)
+
+    def _git_has_changes(self) -> bool:
+        if not self.working_dir:
+            return False
+        try:
+            r = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=str(self.working_dir), capture_output=True, text=True, timeout=5,
+            )
+            return bool(r.stdout.strip())
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            return False

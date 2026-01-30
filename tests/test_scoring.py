@@ -2,7 +2,10 @@ import time
 import tempfile
 import json
 from pathlib import Path
-from junior_dev.scoring import BTMMScoringEngine, BTStats, ComparisonResult
+from junior_dev.scoring import (
+    BTMMScoringEngine,
+    compute_bt_mm_scipy,
+)
 
 
 def test_initialization():
@@ -403,6 +406,69 @@ def test_mm_convergence():
     print("✓ MM convergence test passed\n")
 
 
+def test_scipy_compute_bt_mm_scipy_direct():
+    """Test compute_bt_mm_scipy() directly when scipy is in env."""
+    print("\n" + "="*70)
+    print("TEST: Scipy BT-MM (direct compute_bt_mm_scipy)")
+    print("="*70)
+    
+    candidates = ["a", "b", "c"]
+    comparisons = [
+        ("a", "b", 1.0),
+        ("a", "c", 1.0),
+        ("b", "c", 0.5),
+    ]
+    scores = compute_bt_mm_scipy(candidates, comparisons)
+    assert len(scores) == 3, "Should return scores for all candidates"
+    assert "a" in scores and "b" in scores and "c" in scores
+    total = sum(scores.values())
+    assert total > 0
+    assert abs(total - 1000.0) < 1.0, "Scores are normalized to sum to 1000"
+    assert scores["a"] > scores["b"], "A beat B"
+    assert scores["a"] > scores["c"], "A beat C"
+    print(f"  Scores: {scores}")
+    print("✓ Scipy direct BT-MM test passed\n")
+
+
+def test_scipy_bt_mm_engine():
+    """Test BTMMScoringEngine when scipy is in env."""
+    print("\n" + "="*70)
+    print("TEST: Scipy BT-MM (engine)")
+    print("="*70)
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test_scipy.db"
+        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine.record_comparison("prog_a", "prog_b", "a", "A is better")
+        engine.record_comparison("prog_a", "prog_c", "a", "A wins")
+        engine.record_comparison("prog_b", "prog_c", "tie", "Tie")
+        score_a = engine.get_score("prog_a")
+        score_b = engine.get_score("prog_b")
+        score_c = engine.get_score("prog_c")
+        assert score_a > score_b and score_a > score_c
+        rankings = engine.get_rankings()
+        assert rankings[0][0] == "prog_a"
+        engine.close()
+    print("✓ Scipy engine test passed\n")
+
+
+def test_hand_rolled_mm_in_sub_env():
+    """Test engine works in sub env without scipy (uses hand-rolled MM fallback)."""
+    print("\n" + "="*70)
+    print("TEST: Hand-rolled MM fallback (works in venv without scipy)")
+    print("="*70)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        db_path = Path(tmpdir) / "test_noscipy.db"
+        engine = BTMMScoringEngine(db_path=str(db_path))
+        engine.record_comparison("x", "y", "a", "X wins")
+        engine.record_comparison("x", "z", "tie", "Tie")
+        score_x = engine.get_score("x")
+        score_y = engine.get_score("y")
+        assert score_x > score_y
+        engine.close()
+    print("✓ Hand-rolled MM fallback test passed\n")
+
+
 def run_all_tests():
     print("\n" + "="*70)
     print("BT-MM SCORING ENGINE - COMPREHENSIVE TEST SUITE")
@@ -420,6 +486,9 @@ def run_all_tests():
         test_edge_cases,
         test_performance,
         test_mm_convergence,
+        test_scipy_compute_bt_mm_scipy_direct,
+        test_scipy_bt_mm_engine,
+        test_hand_rolled_mm_in_sub_env,
     ]
     
     passed = 0

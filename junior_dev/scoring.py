@@ -5,7 +5,7 @@ from typing import Tuple, List, Optional, Dict, Any
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from datetime import datetime
-
+from scipy.optimize import minimize
 
 @dataclass
 class BTStats:
@@ -50,51 +50,102 @@ class ComparisonResult:
         return data
 
 
-def compute_bt_mm(candidates: List[str], comparisons: List[Tuple[str, str, float]], 
-                  max_iter: int = 100, tol: float = 1e-6) -> Dict[str, float]:
+def _bt_neg_log_likelihood(
+    log_theta: np.ndarray,
+    candidates: List[str],
+    comparisons: List[Tuple[str, str, float]],
+    idx_map: Dict[str, int],
+) -> float:
+    """Negative log-likelihood for Bradley-Terry. log_theta keeps strengths positive."""
+    theta = np.exp(np.clip(log_theta, -20, 20)) + 1e-12
+    nll = 0.0
+    for a, b, score in comparisons:
+        i, j = idx_map[a], idx_map[b]
+        pi, pj = theta[i], theta[j]
+        s = pi + pj
+        if s <= 0:
+            return 1e10
+        # LL = score*log(pi/s) + (1-score)*log(pj/s). NLL = -LL.
+        nll -= score * (np.log(pi) - np.log(s)) + (1.0 - score) * (np.log(pj) - np.log(s))
+    return nll
+
+
+def compute_bt_mm_scipy(
+    candidates: List[str],
+    comparisons: List[Tuple[str, str, float]],
+) -> Dict[str, float]:
     if not candidates:
         return {}
-    
+    n = len(candidates)
+    idx_map = {c: i for i, c in enumerate(candidates)}
+    x0 = np.zeros(n)
+    res = minimize(
+        _bt_neg_log_likelihood,
+        x0,
+        args=(candidates, comparisons, idx_map),
+        method="L-BFGS-B",
+        bounds=[(-15, 15)] * n,
+    )
+    if not res.success:
+        return {}
+    theta = np.exp(np.clip(res.x, -20, 20))
+    total = np.sum(theta)
+    if total > 0:
+        theta = theta / total * 1000
+    return {candidates[i]: float(theta[i]) for i in range(n)}
+
+
+def compute_bt_mm(
+    candidates: List[str],
+    comparisons: List[Tuple[str, str, float]],
+    max_iter: int = 100,
+    tol: float = 1e-6,
+) -> Dict[str, float]:
+    if not candidates:
+        return {}
     n = len(candidates)
     idx_map = {c: i for i, c in enumerate(candidates)}
     theta = np.ones(n)
     wins = np.zeros(n)
     comp_matrix = np.zeros((n, n))
-    
     for a, b, score in comparisons:
         i, j = idx_map[a], idx_map[b]
         wins[i] += score
         wins[j] += (1.0 - score)
         comp_matrix[i, j] += 1
         comp_matrix[j, i] += 1
-    
-    for iteration in range(max_iter):
+    for _ in range(max_iter):
         theta_old = theta.copy()
         for i in range(n):
             if wins[i] == 0:
                 theta[i] = 1e-10
                 continue
-            denom = sum(comp_matrix[i, j] / (theta_old[i] + theta_old[j]) 
-                       for j in range(n) if comp_matrix[i, j] > 0)
+            denom = sum(
+                comp_matrix[i, j] / (theta_old[i] + theta_old[j])
+                for j in range(n)
+                if comp_matrix[i, j] > 0
+            )
             theta[i] = wins[i] / denom if denom > 0 else 1e-10
-        
         if np.max(np.abs(theta - theta_old)) < tol:
             break
-    
     total = np.sum(theta)
     if total > 0:
         theta = theta / total * 1000
-    
     return {candidates[i]: float(theta[i]) for i in range(n)}
 
 
 class BTMMScoringEngine:
-    def __init__(self, db_path: str, convergence_tol: float = 1e-6, max_iterations: int = 100):
+    def __init__(
+        self,
+        db_path: str,
+        convergence_tol: float = 1e-6,
+        max_iterations: int = 100,
+    ):
         self.db_path = Path(db_path)
         self.convergence_tol = convergence_tol
         self.max_iterations = max_iterations
         self.initial_score = 1.0
-        
+
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = self._init_db()
     
@@ -299,9 +350,15 @@ class BTMMScoringEngine:
         
         if not comparisons:
             return {c: self.initial_score for c in candidates}
-        
-        new_scores = compute_bt_mm(candidates, comparisons, self.max_iterations, self.convergence_tol)
-        
+
+        new_scores = compute_bt_mm_scipy(candidates, comparisons)
+        if not new_scores:
+            new_scores = compute_bt_mm(
+                candidates, comparisons, self.max_iterations, self.convergence_tol
+            )
+        if not new_scores:
+            return {c: self.get_score(c) for c in candidates}
+
         for candidate_id, score in new_scores.items():
             self.conn.execute(
                 "UPDATE bt_scores SET bt_score = ?, updated_at = ? WHERE candidate_id = ?",

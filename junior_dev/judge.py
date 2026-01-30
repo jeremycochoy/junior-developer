@@ -27,39 +27,30 @@ class JudgmentResult:
 
 
 class PairwiseJudge:
-    def __init__(self, llm_model: str = "gpt-4o", system_prompt: Optional[str] = None, 
+    def __init__(self, llm_model: str = "gpt-4o", system_prompt: Optional[str] = None,
                  temperature: float = 0.0, max_tokens: int = 2000):
         self.llm_model = llm_model
         self.system_prompt = system_prompt or self._default_system_prompt()
         self.temperature = temperature
         self.max_tokens = max_tokens
-        
-        self.llm = LLMClient(model_names=[llm_model]) if SHINKA_AVAILABLE else None
+
+        if SHINKA_AVAILABLE and llm_model != "mock":
+            self.llm = LLMClient(model_names=[llm_model], temperatures=temperature)
+        else:
+            self.llm = None
         self.total_comparisons = 0
         self.total_cost = 0.0
     
     def _default_system_prompt(self) -> str:
-        return """You are an expert software architect and code reviewer.
+        return """You are an expert software architect and code reviewer. Compare two solutions and decide which is better.
 
-Your task is to compare two solutions to a programming task and determine which one is better.
+Evaluation criteria (in order of importance): Correctness, code quality, completeness, efficiency, best practices.
+Be objective. If both are equally good, say Tie. Focus on substantial differences.
 
-Evaluation criteria (in order of importance):
-1. **Correctness**: Does it achieve the stated goal?
-2. **Code Quality**: Is it clean, readable, and maintainable?
-3. **Completeness**: Are edge cases and error handling addressed?
-4. **Efficiency**: Is the approach reasonably efficient?
-5. **Best Practices**: Does it follow language conventions?
-
-Important rules:
-- Be objective and specific in your reasoning
-- If both solutions are equally good, say "Tie"
-- Focus on substantial differences, not minor style preferences
-- Consider the task requirements carefully
-
-Response format:
-Winner: [Candidate 1 / Candidate 2 / Tie]
-Confidence: [High / Medium / Low]
-Reasoning: [Your detailed explanation]"""
+Reply in this order (reasoning first, then verdict—this improves accuracy):
+1. Reasoning: [Your detailed explanation of how each solution meets the evolution objective]
+2. Winner: [Candidate 1 / Candidate 2 / Tie]
+3. Confidence: [High / Medium / Low]"""
     
     def compare(self, task_spec: str, candidate_a: str, candidate_b: str, 
                 context: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
@@ -104,11 +95,15 @@ Reasoning: [Your detailed explanation]"""
             timestamp=time.time(),
         )
     
-    def _build_prompt(self, task_spec: str, first: str, second: str, 
+    def _build_prompt(self, task_spec: str, first: str, second: str,
                      context: Optional[Dict[str, Any]] = None) -> str:
-        prompt = f"""# Task Specification
+        objective = task_spec
+        if context and "evolution_objective" in context:
+            objective = context["evolution_objective"]
 
-{task_spec}
+        prompt = f"""# Evolution objective (what the coding agent was asked to achieve)
+
+{objective}
 
 # Candidate 1
 
@@ -118,56 +113,49 @@ Reasoning: [Your detailed explanation]"""
 
 {second}
 """
-        
         if context:
-            prompt += "\n# Additional Context\n\n"
             for key, value in context.items():
+                if key == "evolution_objective":
+                    continue
                 if isinstance(value, str) and len(value) < 1000:
-                    prompt += f"**{key}**:\n{value}\n\n"
+                    prompt += f"\n# {key}\n{value}\n"
                 elif isinstance(value, (int, float, bool)):
-                    prompt += f"**{key}**: {value}\n"
-        
+                    prompt += f"\n**{key}**: {value}\n"
+
         prompt += """
-# Your Task
 
-Compare the two candidates and determine which one better fulfills the task specification.
-Provide your judgment in the following format:
+# Your task
 
-Winner: [Candidate 1 / Candidate 2 / Tie]
-Confidence: [High / Medium / Low]
-Reasoning: [Your detailed explanation of why this candidate is better]
+Compare the two candidates against the evolution objective. Reply in this order:
+1. Reasoning: [Your detailed explanation]
+2. Winner: [Candidate 1 / Candidate 2 / Tie]
+3. Confidence: [High / Medium / Low]
 """
         return prompt
     
     def _parse_response(self, response: str) -> Tuple[str, str, float]:
+        reasoning = response
+        reasoning_match = re.search(r'Reasoning:\s*(.+?)(?=Winner:|Confidence:|\Z)', response, re.IGNORECASE | re.DOTALL)
+        if reasoning_match:
+            reasoning = reasoning_match.group(1).strip()
+
         winner = "tie"
         winner_match = re.search(r'Winner:\s*(Candidate\s*1|Candidate\s*2|Tie)', response, re.IGNORECASE)
-        
         if winner_match:
             winner_text = winner_match.group(1).lower()
-            if "1" in winner_text:
-                winner = "first"
-            elif "2" in winner_text:
-                winner = "second"
-            else:
-                winner = "tie"
+            winner = "first" if "1" in winner_text else ("second" if "2" in winner_text else "tie")
         else:
             if re.search(r'\bcandidate\s*1\b.*\bbetter\b', response, re.IGNORECASE):
                 winner = "first"
             elif re.search(r'\bcandidate\s*2\b.*\bbetter\b', response, re.IGNORECASE):
                 winner = "second"
-        
+
         confidence = 0.5
         confidence_match = re.search(r'Confidence:\s*(High|Medium|Low)', response, re.IGNORECASE)
         if confidence_match:
             conf_text = confidence_match.group(1).lower()
             confidence = {'high': 0.9, 'medium': 0.6, 'low': 0.3}[conf_text]
-        
-        reasoning = response
-        reasoning_match = re.search(r'Reasoning:\s*(.+?)(?=\n\n|\Z)', response, re.IGNORECASE | re.DOTALL)
-        if reasoning_match:
-            reasoning = reasoning_match.group(1).strip()
-        
+
         return winner, reasoning, confidence
     
     def _mock_llm_response(self, first: str, second: str) -> str:

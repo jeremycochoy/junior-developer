@@ -99,8 +99,8 @@ def test_response_parsing():
         ("Winner: Candidate 1\nConfidence: High\nReasoning: Better", "first"),
         ("Winner: Candidate 2\nConfidence: Low\nReasoning: Slightly better", "second"),
         ("Winner: Tie\nConfidence: Medium\nReasoning: Both equal", "tie"),
+        ("Reasoning: A is cleaner and correct.\nWinner: Candidate 1\nConfidence: High", "first"),
     ]
-    
     for response_text, expected_winner in test_cases:
         winner, reasoning, confidence = judge._parse_response(response_text)
         print(f"  Parsed: {winner} (expected: {expected_winner})")

@@ -1,7 +1,9 @@
 coding_agent:
-  agent_type: "aider"
-  timeout: 300
+  agent_type: "pipeline"
+  timeout: 600
   working_dir: null
+  agents_dir: ".agents"
+  pipeline_backend: "cursor"
 
 git:
   default_branch: "master"
@@ -11,6 +13,7 @@ git:
 evaluation:
   num_comparisons: 3
   llm_judge_model: "gpt-4o"
+  llm_judge_temperature: 0.0
   task_spec: "Refactor and improve code quality"
 
 scoring:

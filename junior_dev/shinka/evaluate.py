@@ -24,6 +24,7 @@ def evaluate_coding_agent_prompt(
     num_comparisons: Optional[int] = None,
     agent_type: Optional[str] = None,
     agent_timeout: Optional[int] = None,
+    llm_judge_temperature: Optional[float] = None,
     verbose: bool = True,
     config_path: Optional[str] = None,
 ):
@@ -33,8 +34,9 @@ def evaluate_coding_agent_prompt(
     bt_db_path = bt_db_path or get_config_value(config, "scoring.db_path", "./bt_scores.db")
     llm_judge_model = llm_judge_model or get_config_value(config, "evaluation.llm_judge_model", "gpt-4o")
     num_comparisons = num_comparisons if num_comparisons is not None else get_config_value(config, "evaluation.num_comparisons", 3)
-    agent_type = agent_type or get_config_value(config, "coding_agent.agent_type", "aider")
-    agent_timeout = agent_timeout if agent_timeout is not None else get_config_value(config, "coding_agent.timeout", 300)
+    agent_type = agent_type or get_config_value(config, "coding_agent.agent_type", "pipeline")
+    agent_timeout = agent_timeout if agent_timeout is not None else get_config_value(config, "coding_agent.timeout", 600)
+    judge_temp = llm_judge_temperature if llm_judge_temperature is not None else get_config_value(config, "evaluation.llm_judge_temperature", 0.0)
     spec = importlib.util.spec_from_file_location("program", program_path)
     if spec is None or spec.loader is None:
         raise ValueError(f"Could not load program from {program_path}")
@@ -58,7 +60,15 @@ def evaluate_coding_agent_prompt(
         
         git_manager = GitManager(target_codebase)
         working_dir = get_config_value(config, "coding_agent.working_dir") or target_codebase
-        coding_agent = CodingAgent(agent_type=agent_type, timeout=agent_timeout, working_dir=working_dir)
+        agents_dir = get_config_value(config, "coding_agent.agents_dir", ".agents")
+        pipeline_backend = get_config_value(config, "coding_agent.pipeline_backend", "cursor")
+        coding_agent = CodingAgent(
+            agent_type=agent_type,
+            timeout=agent_timeout,
+            working_dir=working_dir,
+            agents_dir=agents_dir,
+            pipeline_backend=pipeline_backend
+        )
         
         branch_prefix = get_config_value(config, "git.branch_prefix", "candidate_")
         default_branch = get_config_value(config, "git.default_branch", "master")
@@ -81,7 +91,7 @@ def evaluate_coding_agent_prompt(
         changes_applied = agent_result.changes_made
         
         engine = BTMMScoringEngine(db_path=bt_db_path)
-        judge = PairwiseJudge(llm_model=llm_judge_model, temperature=0.0)
+        judge = PairwiseJudge(llm_model=llm_judge_model, temperature=judge_temp)
         
         previous_candidates = engine.get_random_candidates(
             n=num_comparisons, 
@@ -105,11 +115,16 @@ def evaluate_coding_agent_prompt(
             diff_current = git_manager.get_diff(default_branch, branch_name)
             diff_opponent = git_manager.get_diff(default_branch, opponent_branch)
             
+            judge_context = {
+                "evolution_objective": task_spec,
+                "branch_a": branch_name,
+                "branch_b": f"{branch_prefix}{opponent_id}",
+            }
             winner, reasoning = judge.compare(
                 task_spec=task_spec,
                 candidate_a=diff_current,
                 candidate_b=diff_opponent,
-                context={"branch_a": branch_name, "branch_b": f"candidate_{opponent_id}"}
+                context=judge_context,
             )
             
             score_a, score_b = engine.record_comparison(
@@ -235,6 +250,12 @@ if __name__ == "__main__":
         help="LLM model for pairwise judging"
     )
     parser.add_argument(
+        "--llm_judge_temperature",
+        type=float,
+        default=None,
+        help="Judge LLM temperature (default 0 from config; 0 = more deterministic)"
+    )
+    parser.add_argument(
         "--num_comparisons",
         type=int,
         default=3,
@@ -243,8 +264,8 @@ if __name__ == "__main__":
     parser.add_argument(
         "--agent_type",
         type=str,
-        default="aider",
-        help="Coding agent type (aider, claude-code, mock)"
+        default="pipeline",
+        help="Coding agent type (only 'pipeline' is supported)"
     )
     parser.add_argument(
         "--agent_timeout",
@@ -272,6 +293,7 @@ if __name__ == "__main__":
         num_comparisons=args.num_comparisons,
         agent_type=args.agent_type,
         agent_timeout=args.agent_timeout,
+        llm_judge_temperature=args.llm_judge_temperature,
         config_path=args.config,
     )
 
