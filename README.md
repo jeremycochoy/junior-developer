@@ -1,236 +1,124 @@
-# Junior Developer 🧬
+# Junior Developer
 
-> Self-evolving coding agent using genetic algorithms and Bradley-Terry pairwise comparison
+Self-evolving coding agent: it evolves prompts with genetic algorithms and ranks them using pairwise LLM judging and Bradley–Terry (BT-MM) scoring.
 
-A sophisticated system that uses **ShinkaEvolve** (genetic programming framework) combined with **Bradley-Terry with Minorization-Maximization (BT-MM)** scoring to evolve effective coding agent prompts through pairwise LLM-based evaluation.
+---
 
-## 🎯 What Does It Do?
+## What it does
 
-Instead of manually crafting prompts for coding agents, this system:
+1. **Starts** from seed prompts (e.g. “Refactor visualization code”).
+2. **Evolves** them via genetic algorithms (LLM-guided mutation).
+3. **Evaluates** by running a coding agent per candidate and having an LLM judge compare two branches.
+4. **Ranks** candidates with BT-MM in a SQLite DB. Judge “A vs B” decisions and short explanations are stored there.
 
-1. **Starts** with seed prompts (e.g., "Refactor visualization code")
-2. **Evolves** prompts through genetic algorithms (mutation via LLM)
-3. **Evaluates** results by comparing pairs of branches using an LLM judge
-4. **Ranks** all attempts using BT-MM scoring (statistically optimal)
-5. **Converges** on high-quality, specific refactoring instructions
+**Flow:** ShinkaEvolve → `evaluate.py` (run agent, make branches, get diffs) → `judge.py` (LLM picks winner) → `scoring.py` (BT-MM in SQLite).
 
-## 🏗️ Architecture
+---
 
-```
-┌─────────────────┐
-│  ShinkaEvolve   │  Genetic algorithm orchestration
-│   (AlphaEvolve) │  Population management, mutation
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  evaluate.py    │  Evaluation pipeline
-│                 │  • Execute coding agent
-│                 │  • Create Git branches
-│                 │  • Generate diffs
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│ Pairwise Judge  │  LLM compares two branches
-│   (judge.py)    │  • Randomized ordering
-│                 │  • Returns winner + reasoning
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│  BT-MM Scoring  │  Ranking algorithm
-│  (scoring.py)   │  • Global optimization
-│                 │  • No hyperparameters
-└─────────────────┘
-```
+## Install and run (local)
 
-## ✨ Key Features
-
-### **Bradley-Terry with MM (Not ELO)**
-- ✅ **Globally optimal**: Maximum Likelihood Estimation
-- ✅ **No tuning**: No K-factor or learning rate
-- ✅ **Efficient**: O(N × iterations) not O(N²)
-- ✅ **Batch updates**: Recomputes all scores together
-- ✅ **Statistically principled**: Proper probabilistic model
-
-### **Pairwise Comparison**
-- ✅ **LLM-as-Judge**: Single LLM compares two candidates
-- ✅ **Unbiased**: Randomized ordering (A/B positions)
-- ✅ **Context-aware**: Includes task spec and diffs
-- ✅ **Reasoning tracked**: Stores judge's explanation
-
-### **Git-Based Population**
-- ✅ **Branch per candidate**: Easy versioning
-- ✅ **Diff comparison**: Natural code comparison
-- ✅ **Rollback**: Clean state management
-
-## 📦 Installation
+Use a virtual environment. **scipy is required** for BT-MM scoring.
 
 ```bash
-# Clone the repository
 git clone https://github.com/yourusername/junior-developer.git
 cd junior-developer
-
-# Install in development mode
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 pip install -e .
-
-# Or install with all dependencies
-pip install -e ".[dev,llm]"
 ```
 
-## 🚀 Quick Start
+**Quick check:** `pytest tests/`
 
-### 1. Run Tests
+**Run evaluation (needs API keys in `.env`):**
 
 ```bash
-# Run all tests
-pytest tests/
-
-# Run specific test suite
-pytest tests/test_scoring.py -v
-pytest tests/test_judge.py -v
+python examples/test_evaluate.py --num-comparisons 0
 ```
 
-### 2. Basic Usage
+---
 
-```python
-from junior_dev import BTMMScoringEngine, PairwiseJudge
+## Configuration and API keys
 
-# Initialize BT-MM scoring engine
-engine = BTMMScoringEngine(
-    db_path="scores.db",
-    initial_score=1.0,
-    convergence_tol=1e-6
-)
+- **Config file:** `configs/agent_config.yaml` — agent type, timeouts, paths, judge model, task spec.
+- **Environment:** Put secrets in a `.env` file in the project root. Scripts load it automatically.
 
-# Initialize judge
-judge = PairwiseJudge(llm_model="gpt-4")
+**OpenAI (for the judge):**  
+`OPENAI_API_KEY=sk-...` in `.env`.
 
-# Compare two candidates
-result = judge.compare(
-    candidate_a_id="branch_001",
-    candidate_a_output="Refactored code A",
-    candidate_b_id="branch_002",
-    candidate_b_output="Refactored code B",
-    task_spec="Move visualization to separate class",
-    context=""
-)
+**Cursor (for the pipeline agent):**  
+The pipeline uses the Cursor CLI (`agent`). It needs a Cursor API key.
 
-# Record comparison
-score_a, score_b = engine.record_comparison(
-    candidate_a="branch_001",
-    candidate_b="branch_002",
-    winner=result.winner,
-    reasoning=result.reasoning
-)
+- **Where to get it:** [Cursor Dashboard](https://cursor.com/dashboard) → Integrations or Background Agents → create/copy a User API key.
+- **Where to put it:** In `.env` in the project root: `CURSOR_API_KEY=your_key_here`.  
+  Or run `agent login` in a terminal, or `export CURSOR_API_KEY=...` before running.
 
-print(f"Scores: {score_a:.4f} vs {score_b:.4f}")
+Do not commit `.env`. Keep it in `.gitignore`.
 
-# Get rankings
-rankings = engine.get_rankings()
-for rank, stats in enumerate(rankings, 1):
-    print(f"{rank}. {stats.candidate_id}: {stats.bt_score:.4f}")
-```
+---
 
-### 3. Integration with ShinkaEvolve
+## Project layout
+
+| Path | Role |
+|------|------|
+| `junior_dev/scoring.py` | BT-MM engine (scipy), SQLite |
+| `junior_dev/judge.py` | Pairwise LLM judge |
+| `junior_dev/shinka/evaluate.py` | End-to-end eval (agent + git + judge + scoring) |
+| `junior_dev/coding_agent.py` | Runs `.agents/run_pipeline.sh` |
+| `junior_dev/git_manager.py` | Git branches, diffs, commits |
+| `configs/agent_config.yaml` | Main config |
+| `.agents/run_pipeline.sh` | Coding agent script (Cursor/Claude) |
+| `examples/` | `test_evaluate.py`, prompt modules |
+
+---
+
+## Deployment with Shinka
+
+You use a **modified Shinka** (e.g. `../ShinkaEvolve`) with its own environment and LLM config. Your **private repo** holds your evolution runs.
+
+**Layout:**
+
+- **Shinka** — installed elsewhere (e.g. `../ShinkaEvolve`), own env and LLM config.
+- **Private repo** — has `config/` and eval assets (e.g. `eval/`). You run Shinka with this repo as the config dir.
+
+**What to have in the Shinka environment:**
+
+- Install the **JuniorDeveloper** package so Shinka can import it:  
+  `pip install -e /path/to/JuniorDeveloper` (or add it to `PYTHONPATH`).  
+  That brings in `junior_dev` (scoring, judge, git_manager, coding_agent, evaluate).
+- In your repo: **`evaluate.py`** (and any YAML you use) — e.g. copy `junior_dev/shinka/evaluate.py` into your repo’s eval flow, or point Shinka at it. Shinka will call your evaluator with `program_path` and `results_dir`; the evaluator uses `junior_dev`.
+
+**How you run it:**
+
+From your private repo (the dir that has `config/` and eval assets):
 
 ```bash
-# Run evolution
-cd examples/
-python -m shinka.runner --config config.yaml
+shinka_launch --config ./
 ```
 
-## 📁 Project Structure
+(or your Shinka entrypoint, e.g. `python -m shinka.launch_hydra` with the right config path). The important part is that the **config directory** is this repo so Shinka uses your config and your eval entrypoint that uses `evaluate.py` / `junior_dev`.
 
-```
-junior-developer/
-├── junior_dev/              # Main package
-│   ├── __init__.py
-│   ├── scoring.py           # BT-MM scoring engine
-│   ├── judge.py             # Pairwise LLM judge
-│   └── shinka/              # ShinkaEvolve integration
-│       ├── __init__.py
-│       ├── evaluate.py      # Evaluation pipeline
-│       └── initial.py       # Seed prompts
-├── tests/                   # Test suite
-│   ├── test_scoring.py      # BT-MM tests (11 tests)
-│   ├── test_judge.py        # Judge tests (10 tests)
-│   └── test_evaluate.py     # Integration test
-├── archive/                 # Reference implementations
-│   ├── elo_scoring_engine.py
-│   └── simple_demo.py
-├── docs/                    # Documentation
-├── examples/                # Usage examples
-├── configs/                 # Configuration files
-├── requirements.txt         # Dependencies
-├── setup.py                 # Package setup
-└── README.md
-```
+**Coding agent path:**  
+The agent is `.agents/run_pipeline.sh`. Its location is set in config (`coding_agent.agents_dir` in your YAML). You can keep `.agents/` in the private repo and point the config there.
 
-## 🔬 How BT-MM Works
+| Piece | Where / how |
+|-------|-------------|
+| Shinka | Your install (e.g. `../ShinkaEvolve`), own env and LLM config |
+| Config dir | Your repo; run `shinka_launch --config ./` from there |
+| `evaluate.py` | In that repo (e.g. under `eval/`), used by Shinka as the eval entrypoint |
+| `junior_dev` | Installed in the Shinka env so `evaluate.py` can import it |
+| Agent script | Path in config (`agents_dir`), often `.agents/` in the repo |
 
-### The Math (Simplified)
+---
 
-**Bradley-Terry Model**: Probability that A beats B is:
+## BT-MM and scipy
 
-```
-P(A beats B) = score_A / (score_A + score_B)
-```
+Scores maximize the likelihood of the observed “A beats B” outcomes. The engine uses **scipy** (`scipy.optimize`, L-BFGS-B). **scipy must be installed:** `pip install scipy` or `pip install -r requirements.txt`. If scipy is missing, a hand-rolled MM fallback is used so the package still runs (e.g. in a minimal venv).
 
-**Minorization-Maximization**: Iteratively update scores until convergence:
+---
 
-```python
-for iteration in range(max_iterations):
-    for candidate_i in candidates:
-        wins_i = sum(comparisons where i won)
-        games_i = sum(all comparisons involving i)
-        
-        denominator = sum(
-            1 / (score_i + score_j) 
-            for each opponent j
-        )
-        
-        new_score_i = wins_i / denominator
-    
-    if converged:
-        break
-```
+## More detail
 
-**Result**: Globally optimal scores that maximize likelihood of observed outcomes.
-
-## 🧪 Testing
-
-All tests are comprehensive and passing:
-
-```bash
-# BT-MM Scoring Engine (11 tests)
-pytest tests/test_scoring.py -v
-
-# Pairwise Judge (10 tests)  
-pytest tests/test_judge.py -v
-
-# Integration (1 test)
-pytest tests/test_evaluate.py -v
-```
-
-## 📊 Performance
-
-- **Convergence**: Typically 10-20 iterations
-- **Complexity**: O(N × C × I) where:
-  - N = number of candidates
-  - C = comparisons per candidate (~10)
-  - I = iterations (~15)
-- **Scalability**: Tested with 100+ candidates
-- **Cost**: ~$0.50 per 50 generations (with GPT-4)
-
-## 🛠️ Configuration
-
-See `configs/` directory for examples:
-
-- `task/`: Task specifications
-- `evolution/`: Population and generation settings
-- `database/`: Archive configuration
-- `agent/`: Coding agent settings
-
-
+- **Cursor API key (full steps):** `docs/CURSOR_AUTH.md`
+- **Deployment (copy-paste layout):** `docs/DEPLOYMENT.md`
+- **Config options:** `docs/CONFIG_USAGE.md`
