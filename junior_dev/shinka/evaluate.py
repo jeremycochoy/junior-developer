@@ -5,13 +5,41 @@ import argparse
 import importlib.util
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 
 from junior_dev.scoring import BTMMScoringEngine
 from junior_dev.judge import PairwiseJudge
 from junior_dev.git_manager import GitManager
 from junior_dev.coding_agent import CodingAgent, AgentResult
 from junior_dev.config import load_config, get_config_value
+
+
+def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
+    path = Path(program_path)
+    candidate_id = path.stem
+    
+    if program_path.endswith('.json'):
+        with open(program_path, 'r') as f:
+            data = json.load(f)
+        evolved_prompt = data.get('prompt', '')
+        if not evolved_prompt:
+            raise ValueError(f"JSON program must have 'prompt' field: {program_path}")
+        parent_branch = data.get('parent_branch')
+        return evolved_prompt, candidate_id, parent_branch
+    
+    spec = importlib.util.spec_from_file_location("program", program_path)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"Could not load program from {program_path}")
+    
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    
+    evolved_prompt = module.get_evolved_prompt()
+    parent_branch = getattr(module, 'PARENT_BRANCH', None)
+    if hasattr(module, 'CANDIDATE_ID'):
+        candidate_id = module.CANDIDATE_ID
+    
+    return evolved_prompt, candidate_id, parent_branch
 
 
 def evaluate_coding_agent_prompt(
@@ -37,20 +65,14 @@ def evaluate_coding_agent_prompt(
     agent_type = agent_type or get_config_value(config, "coding_agent.agent_type", "pipeline")
     agent_timeout = agent_timeout if agent_timeout is not None else get_config_value(config, "coding_agent.timeout", 600)
     judge_temp = llm_judge_temperature if llm_judge_temperature is not None else get_config_value(config, "evaluation.llm_judge_temperature", 0.0)
-    spec = importlib.util.spec_from_file_location("program", program_path)
-    if spec is None or spec.loader is None:
-        raise ValueError(f"Could not load program from {program_path}")
     
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    evolved_prompt, candidate_id, parent_branch = _load_program(program_path)
     
     start_t = time.time()
     error = ""
     correct = True
     
     try:
-        candidate_id = getattr(module, 'CANDIDATE_ID', Path(program_path).stem)
-        evolved_prompt = module.get_evolved_prompt()
         
         if verbose:
             print(f"\n{'='*70}")
@@ -74,7 +96,15 @@ def evaluate_coding_agent_prompt(
         default_branch = get_config_value(config, "git.default_branch", "master")
         branch_name = f"{branch_prefix}{candidate_id}"
         
-        if not git_manager.create_branch(branch_name, from_branch=default_branch):
+        # Determine which branch to start from:
+        # - If parent_branch is specified in the program, use that
+        # - Otherwise, use the default_branch (e.g., master)
+        from_branch = parent_branch if parent_branch else default_branch
+        
+        if verbose and parent_branch:
+            print(f"Starting from parent branch: {parent_branch}")
+        
+        if not git_manager.create_branch(branch_name, from_branch=from_branch):
             if verbose:
                 print(f"Branch {branch_name} already exists, checking it out...")
             git_manager.checkout_branch(branch_name)
@@ -207,6 +237,22 @@ def evaluate_coding_agent_prompt(
     return metrics
 
 
+def main(
+    program_path: str,
+    results_dir: str,
+    target_codebase: str = "./example_codebase",
+    config: Optional[str] = None,
+    bt_db_path: Optional[str] = None,
+    **kwargs,
+):
+    return evaluate_coding_agent_prompt(
+        program_path=program_path,
+        results_dir=results_dir,
+        target_codebase=target_codebase,
+        config_path=config,
+        bt_db_path=bt_db_path,
+        **kwargs,
+    )
 
 
 if __name__ == "__main__":

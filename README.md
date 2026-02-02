@@ -1,124 +1,133 @@
-# Junior Developer
+# JuniorDeveloper
 
-Self-evolving coding agent: it evolves prompts with genetic algorithms and ranks them using pairwise LLM judging and Bradley–Terry (BT-MM) scoring.
+Evolve coding agent prompts using genetic algorithms + LLM judging.
 
----
+## What It Does
 
-## What it does
+1. **Evolves prompts** - Shinka mutates prompts using LLM-guided evolution
+2. **Runs coding agent** - Each prompt is given to a coding agent (Cursor/Claude)
+3. **Judges results** - LLM compares code changes from different prompts
+4. **Ranks with BT-MM** - Bradley-Terry scoring in SQLite
 
-1. **Starts** from seed prompts (e.g. “Refactor visualization code”).
-2. **Evolves** them via genetic algorithms (LLM-guided mutation).
-3. **Evaluates** by running a coding agent per candidate and having an LLM judge compare two branches.
-4. **Ranks** candidates with BT-MM in a SQLite DB. Judge “A vs B” decisions and short explanations are stored there.
+## Quick Start
 
-**Flow:** ShinkaEvolve → `evaluate.py` (run agent, make branches, get diffs) → `judge.py` (LLM picks winner) → `scoring.py` (BT-MM in SQLite).
-
----
-
-## Install and run (local)
-
-Use a virtual environment. **scipy is required** for BT-MM scoring.
+### 1. Install
 
 ```bash
-git clone https://github.com/yourusername/junior-developer.git
-cd junior-developer
-python -m venv .venv
-source .venv/bin/activate
+git clone <repo>
+cd JuniorDeveloper
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 ```
 
-**Quick check:** `pytest tests/`
+### 2. Set API Keys
 
-**Run evaluation (needs API keys in `.env`):**
-
-```bash
-python examples/test_evaluate.py --num-comparisons 0
+Create `.env` file:
+```
+OPENAI_API_KEY=sk-...
+CURSOR_API_KEY=...
 ```
 
----
-
-## Configuration and API keys
-
-- **Config file:** `configs/agent_config.yaml` — agent type, timeouts, paths, judge model, task spec.
-- **Environment:** Put secrets in a `.env` file in the project root. Scripts load it automatically.
-
-**OpenAI (for the judge):**  
-`OPENAI_API_KEY=sk-...` in `.env`.
-
-**Cursor (for the pipeline agent):**  
-The pipeline uses the Cursor CLI (`agent`). It needs a Cursor API key.
-
-- **Where to get it:** [Cursor Dashboard](https://cursor.com/dashboard) → Integrations or Background Agents → create/copy a User API key.
-- **Where to put it:** In `.env` in the project root: `CURSOR_API_KEY=your_key_here`.  
-  Or run `agent login` in a terminal, or `export CURSOR_API_KEY=...` before running.
-
-Do not commit `.env`. Keep it in `.gitignore`.
-
----
-
-## Project layout
-
-| Path | Role |
-|------|------|
-| `junior_dev/scoring.py` | BT-MM engine (scipy), SQLite |
-| `junior_dev/judge.py` | Pairwise LLM judge |
-| `junior_dev/shinka/evaluate.py` | End-to-end eval (agent + git + judge + scoring) |
-| `junior_dev/coding_agent.py` | Runs `.agents/run_pipeline.sh` |
-| `junior_dev/git_manager.py` | Git branches, diffs, commits |
-| `configs/agent_config.yaml` | Main config |
-| `.agents/run_pipeline.sh` | Coding agent script (Cursor/Claude) |
-| `examples/` | `test_evaluate.py`, prompt modules |
-
----
-
-## Deployment with Shinka
-
-You use a **modified Shinka** (e.g. `../ShinkaEvolve`) with its own environment and LLM config. Your **private repo** holds your evolution runs.
-
-**Layout:**
-
-- **Shinka** — installed elsewhere (e.g. `../ShinkaEvolve`), own env and LLM config.
-- **Private repo** — has `config/` and eval assets (e.g. `eval/`). You run Shinka with this repo as the config dir.
-
-**What to have in the Shinka environment:**
-
-- Install the **JuniorDeveloper** package so Shinka can import it:  
-  `pip install -e /path/to/JuniorDeveloper` (or add it to `PYTHONPATH`).  
-  That brings in `junior_dev` (scoring, judge, git_manager, coding_agent, evaluate).
-- In your repo: **`evaluate.py`** (and any YAML you use) — e.g. copy `junior_dev/shinka/evaluate.py` into your repo’s eval flow, or point Shinka at it. Shinka will call your evaluator with `program_path` and `results_dir`; the evaluator uses `junior_dev`.
-
-**How you run it:**
-
-From your private repo (the dir that has `config/` and eval assets):
+### 3. Run Snake Game Evolution
 
 ```bash
-shinka_launch --config ./
+# Install in Shinka environment
+cd /path/to/ShinkaEvolve
+source venv/bin/activate
+pip install -e /path/to/JuniorDeveloper
+
+# Run evolution (12 generations, 13 nodes)
+cd /path/to/JuniorDeveloper
+python run_snake_evolution.py
 ```
 
-(or your Shinka entrypoint, e.g. `python -m shinka.launch_hydra` with the right config path). The important part is that the **config directory** is this repo so Shinka uses your config and your eval entrypoint that uses `evaluate.py` / `junior_dev`.
+## Project Structure
 
-**Coding agent path:**  
-The agent is `.agents/run_pipeline.sh`. Its location is set in config (`coding_agent.agents_dir` in your YAML). You can keep `.agents/` in the private repo and point the config there.
+```
+JuniorDeveloper/
+├── run_snake_evolution.py      # Main script to run evolution
+├── eval_snake.py               # Evaluation script for Shinka
+├── configs/
+│   ├── agent_config.yaml       # Agent, judge, scoring settings
+│   └── task/snake_game.yaml    # Shinka task configuration
+├── junior_dev/
+│   ├── shinka/
+│   │   ├── evaluate.py         # Evaluation logic
+│   │   └── initial_snake.py    # Initial program with EVOLVE-BLOCK
+│   ├── coding_agent.py         # Runs coding pipeline
+│   ├── judge.py                # Pairwise LLM judge
+│   ├── scoring.py              # BT-MM scoring engine
+│   └── git_manager.py          # Git operations
+├── .agents/                    # Coding agent scripts
+│   └── run_pipeline.sh
+└── results/
+    └── snake_evolution/        # Evolution results (13 nodes)
+```
 
-| Piece | Where / how |
-|-------|-------------|
-| Shinka | Your install (e.g. `../ShinkaEvolve`), own env and LLM config |
-| Config dir | Your repo; run `shinka_launch --config ./` from there |
-| `evaluate.py` | In that repo (e.g. under `eval/`), used by Shinka as the eval entrypoint |
-| `junior_dev` | Installed in the Shinka env so `evaluate.py` can import it |
-| Agent script | Path in config (`agents_dir`), often `.agents/` in the repo |
+## How It Works
 
----
+### Program Format
 
-## BT-MM and scipy
+Programs are Python files with `EVOLVE-BLOCK` markers:
 
-Scores maximize the likelihood of the observed “A beats B” outcomes. The engine uses **scipy** (`scipy.optimize`, L-BFGS-B). **scipy must be installed:** `pip install scipy` or `pip install -r requirements.txt`. If scipy is missing, a hand-rolled MM fallback is used so the package still runs (e.g. in a minimal venv).
+```python
+# EVOLVE-BLOCK-START
+EVOLVED_PROMPT = """Create a snake game with:
+1. Canvas rendering
+2. Arrow key controls
+3. Score display
+..."""
+# EVOLVE-BLOCK-END
 
----
+def get_evolved_prompt():
+    return EVOLVED_PROMPT
+```
 
-## More detail
+Shinka mutates the content inside `EVOLVE-BLOCK-START/END`.
 
-- **Cursor API key (full steps):** `docs/CURSOR_AUTH.md`
-- **Deployment (copy-paste layout):** `docs/DEPLOYMENT.md`
-- **Config options:** `docs/CONFIG_USAGE.md`
+### Evolution Flow
+
+```
+Shinka → evolves prompt → eval_snake.py → coding agent → git diff → judge → BT-MM score
+```
+
+1. Shinka generates new prompt variations
+2. `eval_snake.py` runs the coding agent with each prompt
+3. Git diffs are compared using pairwise LLM judging
+4. BT-MM scores determine parent selection
+
+### Configuration
+
+**`configs/agent_config.yaml`** - Local settings:
+- `coding_agent.timeout` - Agent execution timeout
+- `evaluation.llm_judge_model` - Judge model (gpt-4o)
+- `evaluation.num_comparisons` - Comparisons per candidate
+
+**`configs/task/snake_game.yaml`** - Shinka task:
+- `evo_config.task_sys_msg` - System prompt for evolution
+- `evo_config.init_program_path` - Initial program path
+
+## Results (12 Generations, 13 Nodes)
+
+The completed evolution shows prompt improvement:
+
+**Gen 0 (Initial):**
+> "Create a simple snake game..."
+
+**Gen 11 (Evolved):**
+> "Create a visually appealing snake game with touch controls, gradients, responsive design..."
+
+Results in `results/snake_evolution/`:
+- `gen_*/main.py` - Evolved programs
+- `evolution_db.sqlite` - Shinka database
+- `bt_scores.db` - BT-MM scores
+
+## Tests
+
+```bash
+source venv/bin/activate
+pytest tests/
+```
+

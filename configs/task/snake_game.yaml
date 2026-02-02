@@ -1,0 +1,29 @@
+evo_config:
+  task_sys_msg: |
+    You are evolving prompts for a coding agent that creates snake games.
+    
+    **Task:** Create a snake game in a self-contained HTML file.
+    - Runs in any web browser
+    - Simple, clean code
+    - Appealing visual style
+    
+    **What you evolve:** The prompt given to the coding agent (in EVOLVE-BLOCK).
+    
+    **Tips for better prompts:**
+    - Be specific about visuals (colors, animations)
+    - Specify controls (arrow keys, touch)
+    - Request responsive design
+    - Ask for clean code structure
+    
+    **Scoring:** Pairwise LLM judging compares code changes from different prompts.
+
+  language: "python"
+  init_program_path: "junior_dev/shinka/initial_snake.py"
+  job_type: "local"
+
+evaluate_function:
+  _target_: junior_dev.shinka.evaluate.main
+  program_path: ???
+  results_dir: ???
+
+exp_name: "snake_game"
