@@ -55,7 +55,7 @@ JuniorDeveloper/
 ├── junior_dev/
 │   ├── shinka/
 │   │   ├── evaluate.py         # Evaluation logic
-│   │   └── initial_snake.py    # Initial program with EVOLVE-BLOCK
+│   │   └── initial_snake.json  # Initial program (JSON with EVOLVE-BLOCK)
 │   ├── coding_agent.py         # Runs coding pipeline
 │   ├── judge.py                # Pairwise LLM judge
 │   ├── scoring.py              # BT-MM scoring engine
@@ -70,22 +70,18 @@ JuniorDeveloper/
 
 ### Program Format
 
-Programs are Python files with `EVOLVE-BLOCK` markers:
+Programs are **JSON** files with JSON5-style comment blocks (`// EVOLVE-BLOCK-START` / `// EVOLVE-BLOCK-END`). The LLM must always output `parent_branch` and `prompt`; missing `parent_branch` is treated as malformed (invalid node).
 
-```python
-# EVOLVE-BLOCK-START
-EVOLVED_PROMPT = """Create a snake game with:
-1. Canvas rendering
-2. Arrow key controls
-3. Score display
-..."""
-# EVOLVE-BLOCK-END
-
-def get_evolved_prompt():
-    return EVOLVED_PROMPT
+```json
+// EVOLVE-BLOCK-START
+{
+  "parent_branch": "master",
+  "prompt": "Create a snake game with canvas, arrow keys, score..."
+}
+// EVOLVE-BLOCK-END
 ```
 
-Shinka mutates the content inside `EVOLVE-BLOCK-START/END`.
+Shinka mutates the JSON between the markers. The evaluator writes `branch_name` to `metrics.json` (under `public`) so the next node can use it as `parent_branch`.
 
 ### Evolution Flow
 
@@ -120,9 +116,15 @@ The completed evolution shows prompt improvement:
 > "Create a visually appealing snake game with touch controls, gradients, responsive design..."
 
 Results in `results/snake_evolution/`:
-- `gen_*/main.py` - Evolved programs
+- `gen_*/main.json` - Evolved programs
 - `evolution_db.sqlite` - Shinka database
 - `bt_scores.db` - BT-MM scores
+
+**Branch name for next node:** Each evaluation writes `public.branch_name` in `metrics.json`. Shinka stores this in the program's `public_metrics`, so the next node's LLM sees it and can set `parent_branch` to build on that node.
+
+**Scores in Shinka DB:** The current node's score is written to Shinka via `metrics.json`. Full recompute of all nodes' BT-MM scores after each new branch would require a Shinka-side hook to read updated scores and update all programs; currently only the new node's score is set.
+
+**API cost:** With cheap models (e.g. gpt-4o-mini), typical cost is under ~$1 per run; can be included in final payment if needed.
 
 ## Tests
 

@@ -17,8 +17,8 @@ evo_config:
     
     **Scoring:** Pairwise LLM judging compares code changes from different prompts.
 
-  language: "python"
-  init_program_path: "junior_dev/shinka/initial_snake.py"
+  language: "json"
+  init_program_path: "junior_dev/shinka/initial_snake.json"
   job_type: "local"
 
 evaluate_function:

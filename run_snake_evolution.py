@@ -12,11 +12,15 @@ from shinka.launch import LocalJobConfig
 PROJECT_DIR = Path(__file__).parent
 RESULTS_DIR = PROJECT_DIR / "results" / "snake_evolution"
 TARGET_CODEBASE = PROJECT_DIR / "results" / "snake_codebase"
-INIT_PROGRAM = PROJECT_DIR / "junior_dev" / "shinka" / "initial_snake.py"
+INIT_PROGRAM = PROJECT_DIR / "junior_dev" / "shinka" / "initial_snake.json"
 EVALUATOR_CONFIG = PROJECT_DIR / "configs" / "agent_config.yaml"
 
 NUM_GENERATIONS = 12
 
+ORIGINAL_TASK_SPEC = (
+    "Create a snake game in a self-contained HTML file that runs in every web browser. "
+    "Code should be simple; game should have an appealing aesthetic."
+)
 
 # Shinka configuration
 
@@ -35,14 +39,13 @@ db_config = DatabaseConfig(
     exploitation_alpha=1.0,
 )
 
-task_sys_msg = """You are evolving prompts for a coding agent that creates snake games.
+task_sys_msg = f"""You are evolving prompts for a coding agent. Each output must be valid JSON with "parent_branch" and "prompt".
 
-**Task:** Create a snake game in a self-contained HTML file.
-- Runs in any web browser
-- Simple, clean code  
-- Appealing visual style
+**Original task (do not forget):** {ORIGINAL_TASK_SPEC}
 
-**What you evolve:** The prompt inside EVOLVE-BLOCK markers.
+**Output format:** Inside the EVOLVE-BLOCK, output only a JSON object with:
+- "parent_branch": the git branch to build on (e.g. "master" or "candidate_gen_01_abc" from a prior node's branch_name). You must always set this.
+- "prompt": the instruction for the coding agent.
 
 **Tips for better prompts:**
 - Be specific about visuals (colors, animations)
@@ -50,7 +53,7 @@ task_sys_msg = """You are evolving prompts for a coding agent that creates snake
 - Request responsive design
 - Ask for clean code structure
 
-**Scoring:** Pairwise LLM judging compares code changes."""
+**Scoring:** Pairwise LLM judging compares code changes. The parent program's "branch_name" in its metrics is the branch you can set as parent_branch to build on that node."""
 
 evo_config = EvolutionConfig(
     task_sys_msg=task_sys_msg,
@@ -60,11 +63,11 @@ evo_config = EvolutionConfig(
     max_parallel_jobs=1,
     max_patch_attempts=5,
     job_type="local",
-    language="python",
+    language="json",
     llm_models=["gpt-4o-mini"],
     llm_kwargs={"temperatures": [0.7, 1.0]},
     embedding_model="text-embedding-3-small",
-    init_program_path=str(INIT_PROGRAM),
+    init_program_path=str(INIT_PROGRAM.resolve()),
     results_dir=str(RESULTS_DIR),
 )
 

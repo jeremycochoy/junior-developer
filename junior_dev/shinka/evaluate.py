@@ -14,13 +14,29 @@ from junior_dev.coding_agent import CodingAgent, AgentResult
 from junior_dev.config import load_config, get_config_value
 
 
+def _extract_json_from_evolve_block(content: str) -> str:
+    start_marker = "EVOLVE-BLOCK-START"
+    end_marker = "EVOLVE-BLOCK-END"
+    if start_marker not in content or end_marker not in content:
+        return content.strip()
+    start_idx = content.find(start_marker) + len(start_marker)
+    end_idx = content.find(end_marker)
+    if start_idx >= end_idx:
+        return content.strip()
+    block = content[start_idx:end_idx].strip()
+    lines = [line for line in block.splitlines() if line.strip() and not line.strip().startswith("//")]
+    return "\n".join(lines)
+
+
 def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
     path = Path(program_path)
     candidate_id = path.stem
     
     if program_path.endswith('.json'):
-        with open(program_path, 'r') as f:
-            data = json.load(f)
+        with open(program_path, 'r', encoding='utf-8') as f:
+            raw = f.read()
+        json_str = _extract_json_from_evolve_block(raw)
+        data = json.loads(json_str)
         evolved_prompt = data.get('prompt', '')
         if not evolved_prompt:
             raise ValueError(f"JSON program must have 'prompt' field: {program_path}")
@@ -71,6 +87,25 @@ def evaluate_coding_agent_prompt(
     start_t = time.time()
     error = ""
     correct = True
+    
+    if program_path.endswith('.json'):
+        if parent_branch is None or (isinstance(parent_branch, str) and not parent_branch.strip()):
+            correct = False
+            error = "JSON program missing required 'parent_branch'; LLM output is malformed."
+            if verbose:
+                print(f"Invalid program: {error}")
+            metrics = {
+                "combined_score": 0.0,
+                "runtime": time.time() - start_t,
+                "public": {"branch_name": "", "error": error},
+                "private": {},
+            }
+            Path(results_dir).mkdir(parents=True, exist_ok=True)
+            with open(os.path.join(results_dir, "correct.json"), "w") as f:
+                json.dump({"correct": False, "error": error}, f, indent=4)
+            with open(os.path.join(results_dir, "metrics.json"), "w") as f:
+                json.dump(metrics, f, indent=4)
+            return metrics
     
     try:
         
