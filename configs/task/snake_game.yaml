@@ -1,3 +1,9 @@
+distributed_job_config:
+  _target_: shinka.launch.SlurmCondaJobConfig
+  eval_program_path: "eval_snake.py"
+  conda_env: ""
+  modules: []
+
 evo_config:
   task_sys_msg: |
     You are evolving prompts for a coding agent that creates snake games.
