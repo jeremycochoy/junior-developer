@@ -1,12 +1,13 @@
 import os
 import json
+import sqlite3
 import subprocess
 import time
 import argparse
 import importlib.util
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from junior_dev.scoring import BTMMScoringEngine
 from junior_dev.judge import PairwiseJudge
@@ -59,6 +60,51 @@ def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
         candidate_id = module.CANDIDATE_ID
     
     return evolved_prompt, candidate_id, parent_branch
+
+
+def _sync_bt_scores_to_shinka_db(
+    run_root: Path,
+    all_scores: List[Tuple[str, float, Dict[str, Any]]],
+    branch_prefix: str,
+    verbose: bool = True,
+) -> None:
+    db_path = run_root / "evolution_db.sqlite"
+    if not db_path.exists():
+        return
+    score_by_candidate = {candidate_id: score for candidate_id, score, _ in all_scores}
+    try:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        cur = conn.execute(
+            "SELECT id, public_metrics FROM programs WHERE public_metrics IS NOT NULL AND public_metrics != ''"
+        )
+        rows = cur.fetchall()
+        updated = 0
+        for row in rows:
+            program_id = row["id"]
+            try:
+                pm = json.loads(row["public_metrics"]) if row["public_metrics"] else {}
+            except (json.JSONDecodeError, TypeError):
+                continue
+            branch_name = pm.get("branch_name") or pm.get("branch_for_checkout")
+            if not branch_name or not isinstance(branch_name, str):
+                continue
+            if branch_name.startswith(branch_prefix):
+                candidate_id = branch_name[len(branch_prefix) :].strip()
+            else:
+                candidate_id = branch_name
+            if candidate_id not in score_by_candidate:
+                continue
+            score = score_by_candidate[candidate_id]
+            conn.execute("UPDATE programs SET combined_score = ? WHERE id = ?", (score, program_id))
+            updated += 1
+        conn.commit()
+        conn.close()
+        if verbose and updated:
+            print(f"Synced BT-MM scores to Shinka DB: updated {updated} program(s).")
+    except Exception as e:
+        if verbose:
+            print(f"Warning: could not sync BT scores to Shinka DB: {e}")
 
 
 def _ensure_target_codebase(target_codebase: str, verbose: bool = True) -> None:
@@ -119,6 +165,8 @@ def evaluate_coding_agent_prompt(
     start_t = time.time()
     error = ""
     correct = True
+    sync_all_scores: Optional[List[Tuple[str, float, Dict[str, Any]]]] = None
+    sync_branch_prefix: Optional[str] = None
 
     if program_path.endswith('.json'):
         if parent_branch is None or (isinstance(parent_branch, str) and not parent_branch.strip()):
@@ -245,6 +293,8 @@ def evaluate_coding_agent_prompt(
         final_score = engine.get_score(candidate_id)
         stats = engine.get_stats(candidate_id)
         judge_stats = judge.get_statistics()
+        sync_all_scores = engine.get_rankings()
+        sync_branch_prefix = branch_prefix
         
         metrics = {
             "combined_score": float(final_score),
@@ -295,7 +345,14 @@ def evaluate_coding_agent_prompt(
     metrics_file = os.path.join(results_dir, "metrics.json")
     with open(metrics_file, "w") as f:
         json.dump(metrics, f, indent=4)
-    
+
+    if sync_all_scores is not None and sync_branch_prefix is not None:
+        evo_db = run_root / "evolution_db.sqlite"
+        if evo_db.exists():
+            _sync_bt_scores_to_shinka_db(
+                run_root, sync_all_scores, sync_branch_prefix, verbose=verbose
+            )
+
     elapsed = metrics["runtime"]
     hours = int(elapsed // 3600)
     minutes = int((elapsed % 3600) // 60)
