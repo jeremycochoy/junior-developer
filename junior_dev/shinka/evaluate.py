@@ -1,5 +1,6 @@
 import os
 import json
+import subprocess
 import time
 import argparse
 import importlib.util
@@ -29,8 +30,10 @@ def _extract_json_from_evolve_block(content: str) -> str:
 
 
 def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
-    path = Path(program_path)
-    candidate_id = path.stem
+    path = Path(program_path).resolve()
+    # Use parent dir + stem so each Shinka job (e.g. gen_0/main.json, gen_1/main.json) has a
+    # unique candidate_id; otherwise path.stem is always "main" and we get no comparisons.
+    candidate_id = f"{path.parent.name}_{path.stem}"
     
     if program_path.endswith('.json'):
         with open(program_path, 'r', encoding='utf-8') as f:
@@ -58,6 +61,30 @@ def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
     return evolved_prompt, candidate_id, parent_branch
 
 
+def _ensure_target_codebase(target_codebase: str, verbose: bool = True) -> None:
+    path = Path(target_codebase).resolve()
+    path.mkdir(parents=True, exist_ok=True)
+    index_html = path / "index.html"
+    if not index_html.exists():
+        index_html.write_text("""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Snake</title>
+</head>
+<body>
+</body>
+</html>
+""")
+    git_dir = path / ".git"
+    if not git_dir.exists():
+        subprocess.run(["git", "init"], cwd=path, check=True)
+        subprocess.run(["git", "add", "."], cwd=path, check=True)
+        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=path, check=True)
+        if verbose:
+            print(f"Initialized git repo: {path}")
+
+
 def evaluate_coding_agent_prompt(
     program_path: str,
     results_dir: str,
@@ -76,18 +103,23 @@ def evaluate_coding_agent_prompt(
     
     task_spec = task_spec or get_config_value(config, "evaluation.task_spec", "Refactor and improve the code quality")
     bt_db_path = bt_db_path or get_config_value(config, "scoring.db_path", "./bt_scores.db")
+    # Use run-specific BT DB when inside a Shinka run (results_dir = .../gen_N/results) so
+    # all jobs in the run share one DB and pairwise comparisons accumulate; otherwise all get initial_score 1.0.
+    run_root = Path(results_dir).resolve().parent.parent
+    if (run_root / "evolution_db.sqlite").exists():
+        bt_db_path = str(run_root / "bt_scores.db")
+        if verbose:
+            print(f"Using run-specific BT DB: {bt_db_path}")
     llm_judge_model = llm_judge_model or get_config_value(config, "evaluation.llm_judge_model", "gpt-4o")
     num_comparisons = num_comparisons if num_comparisons is not None else get_config_value(config, "evaluation.num_comparisons", 3)
     agent_type = agent_type or get_config_value(config, "coding_agent.agent_type", "pipeline")
     agent_timeout = agent_timeout if agent_timeout is not None else get_config_value(config, "coding_agent.timeout", 600)
     judge_temp = llm_judge_temperature if llm_judge_temperature is not None else get_config_value(config, "evaluation.llm_judge_temperature", 0.0)
-    
     evolved_prompt, candidate_id, parent_branch = _load_program(program_path)
-    
     start_t = time.time()
     error = ""
     correct = True
-    
+
     if program_path.endswith('.json'):
         if parent_branch is None or (isinstance(parent_branch, str) and not parent_branch.strip()):
             correct = False
@@ -115,6 +147,7 @@ def evaluate_coding_agent_prompt(
             print(f"{'='*70}")
             print(f"Evolved Prompt:\n{evolved_prompt[:200]}...")
         
+        _ensure_target_codebase(target_codebase, verbose=verbose)
         git_manager = GitManager(target_codebase)
         working_dir = get_config_value(config, "coding_agent.working_dir") or target_codebase
         agents_dir = get_config_value(config, "coding_agent.agents_dir", ".agents")
@@ -224,6 +257,7 @@ def evaluate_coding_agent_prompt(
                 "win_rate": stats.win_rate if stats else 0.0,
                 "total_comparisons": stats.num_comparisons if stats else 0,
                 "branch_name": branch_name,
+                "branch_for_checkout": branch_name,  # so evolution LLM sees which branch to use as parent_branch
                 "changes_applied": changes_applied,
             },
             "private": {
@@ -268,6 +302,8 @@ def evaluate_coding_agent_prompt(
     seconds = int(elapsed % 60)
     print(f"Evaluation completed in {hours}h {minutes}m {seconds}s")
     print(f"Results saved to {results_dir}")
+    if metrics.get("public") and "branch_name" in metrics["public"]:
+        print(f"Branch for checkout (use as parent_branch): {metrics['public']['branch_name']}")
     
     return metrics
 

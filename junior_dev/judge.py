@@ -27,7 +27,7 @@ class JudgmentResult:
 
 
 class PairwiseJudge:
-    def __init__(self, llm_model: str = "gpt-4o", system_prompt: Optional[str] = None,
+    def __init__(self, llm_model: str = "gpt-4o-mini", system_prompt: Optional[str] = None,
                  temperature: float = 0.0, max_tokens: int = 2000):
         self.llm_model = llm_model
         self.system_prompt = system_prompt or self._default_system_prompt()
@@ -42,13 +42,14 @@ class PairwiseJudge:
         self.total_cost = 0.0
     
     def _default_system_prompt(self) -> str:
-        return """You are an expert software architect and code reviewer. Compare two solutions and decide which is better.
+        return """You are an expert software architect and code reviewer. You compare two **diffs** (patch/changes from a common base) and decide which, when applied, would **better achieve the evolution objective**.
 
-Evaluation criteria (in order of importance): Correctness, code quality, completeness, efficiency, best practices.
-Be objective. If both are equally good, say Tie. Focus on substantial differences.
+What you see: Each candidate is a **git-style diff** (lines starting with +/-, showing additions and deletions from the base). Do not treat them as full source files. Judge based on what the **resulting code would do** and how well it meets the objective.
+
+Evaluation criteria (in order of importance): How well the **resulting change** fulfills the stated objective, correctness and completeness of the change, then code quality. Prefer the diff that leads to a better outcome (e.g. better game, requested features, clearer UX). Do NOT prefer a diff merely because it is shorter or has fewer lines—prefer the one that better achieves the goal. If both are equally good, say Tie.
 
 Reply in this order (reasoning first, then verdict—this improves accuracy):
-1. Reasoning: [Your detailed explanation of how each solution meets the evolution objective]
+1. Reasoning: [Your explanation of how each diff meets the evolution objective and which outcome is better]
 2. Winner: [Candidate 1 / Candidate 2 / Tie]
 3. Confidence: [High / Medium / Low]"""
     
@@ -105,11 +106,11 @@ Reply in this order (reasoning first, then verdict—this improves accuracy):
 
 {objective}
 
-# Candidate 1
+# Candidate 1 (diff: changes from base)
 
 {first}
 
-# Candidate 2
+# Candidate 2 (diff: changes from base)
 
 {second}
 """
@@ -126,8 +127,8 @@ Reply in this order (reasoning first, then verdict—this improves accuracy):
 
 # Your task
 
-Compare the two candidates against the evolution objective. Reply in this order:
-1. Reasoning: [Your detailed explanation]
+Each candidate above is a **diff** (patch). Which diff, when applied to the base, would **better achieve the evolution objective**? Judge the outcome (resulting behavior/features), not diff size. Reply in this order:
+1. Reasoning: [Your explanation of how each diff meets the objective and which outcome is better]
 2. Winner: [Candidate 1 / Candidate 2 / Tie]
 3. Confidence: [High / Medium / Low]
 """
@@ -159,16 +160,10 @@ Compare the two candidates against the evolution objective. Reply in this order:
         return winner, reasoning, confidence
     
     def _mock_llm_response(self, first: str, second: str) -> str:
-        if len(first) < len(second):
-            winner, reason = "Candidate 1", "more concise implementation"
-        elif len(second) < len(first):
-            winner, reason = "Candidate 2", "more concise implementation"
-        else:
-            winner, reason = "Tie", "both solutions are equivalent"
-        
-        return f"""Winner: {winner}
-Confidence: Medium
-Reasoning: This is a mock response for testing. {winner} appears to have a {reason}."""
+        # Mock: do not prefer by diff size; treat as tie so diff-based judging is not biased.
+        return """Winner: Tie
+Confidence: Low
+Reasoning: This is a mock response for testing. Cannot judge diffs without a real LLM; treat as equivalent."""
     
     def get_statistics(self) -> Dict[str, Any]:
         return {

@@ -37,7 +37,9 @@ BACKEND="${AGENT_BACKEND:-cursor}"
 # Commands for each backend
 CLAUDE_CMD="claude -p --system-prompt-file"
 
-CURSOR_CMD="${CURSOR_CMD:-agent -p --output-format text}"
+CURSOR_MODEL="${CURSOR_MODEL:-auto}"
+
+CURSOR_CMD="agent -p --output-format text --model ${CURSOR_MODEL}"
 
 run_agent() {
   local role_file="$1"   # e.g. .agents/01_implement.md

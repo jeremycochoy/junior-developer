@@ -9,7 +9,7 @@ coding_agent:
 # Evaluation Settings
 evaluation:
   task_spec: "Create a snake game in a self-contained HTML file"
-  llm_judge_model: "gpt-4o"
+  llm_judge_model: "gpt-4o-mini"
   llm_judge_temperature: 0.0
   num_comparisons: 3
 
