@@ -270,7 +270,44 @@ class BTMMScoringEngine:
             params = (n,)
         
         return [r['candidate_id'] for r in self.conn.execute(query, params).fetchall()]
-    
+
+    def get_quartile_candidates(
+        self, n_quartiles: int = 4, exclude: Optional[List[str]] = None
+    ) -> List[str]:
+        ranking = self.get_rankings(min_comparisons=0)
+        ids = [r[0] for r in ranking]
+        if exclude:
+            ids = [c for c in ids if c not in exclude]
+        if len(ids) < n_quartiles:
+            return ids
+        result = []
+        for i in range(n_quartiles):
+            lo = (i * len(ids)) // n_quartiles
+            hi = ((i + 1) * len(ids)) // n_quartiles
+            if lo < hi:
+                mid = (lo + hi - 1) // 2
+                result.append(ids[mid])
+        return result
+
+    def get_neighbor_candidates(self, candidate_id: str, n: int = 3) -> List[str]:
+        ranking = self.get_rankings(min_comparisons=0)
+        ids = [r[0] for r in ranking]
+        try:
+            idx = ids.index(candidate_id)
+        except ValueError:
+            return []
+        neighbors = []
+        for offset in range(1, n + 1):
+            for sign in (1, -1):
+                if len(neighbors) >= n:
+                    break
+                i = idx + sign * offset
+                if 0 <= i < len(ids) and ids[i] != candidate_id and ids[i] not in neighbors:
+                    neighbors.append(ids[i])
+            if len(neighbors) >= n:
+                break
+        return neighbors[:n]
+
     def get_comparison_history(self, candidate_id: str) -> List[ComparisonResult]:
         rows = self.conn.execute(
             "SELECT * FROM comparisons WHERE candidate_a = ? OR candidate_b = ? ORDER BY timestamp DESC",

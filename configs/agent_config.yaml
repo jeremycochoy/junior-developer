@@ -11,7 +11,7 @@ evaluation:
   task_spec: "Create a snake game in a self-contained HTML file"
   llm_judge_model: "gpt-4o-mini"
   llm_judge_temperature: 0.0
-  num_comparisons: 3
+  num_comparisons: 10   # 3 random + 4 quartiles + 3 neighbors
 
 # BT-MM Scoring
 scoring:

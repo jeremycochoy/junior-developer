@@ -238,58 +238,61 @@ def evaluate_coding_agent_prompt(
         
         engine = BTMMScoringEngine(db_path=bt_db_path)
         judge = PairwiseJudge(llm_model=llm_judge_model, temperature=judge_temp)
-        
-        previous_candidates = engine.get_random_candidates(
-            n=num_comparisons, 
-            exclude=[candidate_id]
-        )
-        
+
+        n_random = max(1, (3 * num_comparisons) // 10)
+        n_quartile = min(4, max(1, (4 * num_comparisons) // 10))
+        n_neighbors = max(1, num_comparisons - n_random - n_quartile)
+        random_ids = engine.get_random_candidates(n=n_random, exclude=[candidate_id])
+        quartile_ids = engine.get_quartile_candidates(n_quartiles=n_quartile, exclude=[candidate_id])
+        phase1_opponents = list(dict.fromkeys([*random_ids, *quartile_ids]))
         if verbose:
-            print(f"\nRunning {len(previous_candidates)} pairwise comparisons...")
-        
+            print(f"\nPhase 1: {len(phase1_opponents)} opponents (random + quartiles)...")
+
         wins = 0
         losses = 0
         ties = 0
-        
-        for opponent_id in previous_candidates:
-            opponent_branch = f"{branch_prefix}{opponent_id}"
-            if not git_manager.branch_exists(opponent_branch):
+
+        def run_comparisons(opponent_ids: List[str]) -> None:
+            nonlocal wins, losses, ties
+            for opponent_id in opponent_ids:
+                opponent_branch = f"{branch_prefix}{opponent_id}"
+                if not git_manager.branch_exists(opponent_branch):
+                    if verbose:
+                        print(f"  Skipping {opponent_id}: branch {opponent_branch} does not exist")
+                    continue
+                diff_current = git_manager.get_diff(default_branch, branch_name)
+                diff_opponent = git_manager.get_diff(default_branch, opponent_branch)
+                judge_context = {
+                    "evolution_objective": task_spec,
+                    "branch_a": branch_name,
+                    "branch_b": f"{branch_prefix}{opponent_id}",
+                }
+                winner, reasoning = judge.compare(
+                    task_spec=task_spec,
+                    candidate_a=diff_current,
+                    candidate_b=diff_opponent,
+                    context=judge_context,
+                )
+                score_a, score_b = engine.record_comparison(
+                    candidate_id, opponent_id, winner, reasoning
+                )
+                if winner == "a":
+                    wins += 1
+                elif winner == "b":
+                    losses += 1
+                else:
+                    ties += 1
                 if verbose:
-                    print(f"  Skipping {opponent_id}: branch {opponent_branch} does not exist")
-                continue
-            
-            diff_current = git_manager.get_diff(default_branch, branch_name)
-            diff_opponent = git_manager.get_diff(default_branch, opponent_branch)
-            
-            judge_context = {
-                "evolution_objective": task_spec,
-                "branch_a": branch_name,
-                "branch_b": f"{branch_prefix}{opponent_id}",
-            }
-            winner, reasoning = judge.compare(
-                task_spec=task_spec,
-                candidate_a=diff_current,
-                candidate_b=diff_opponent,
-                context=judge_context,
-            )
-            
-            score_a, score_b = engine.record_comparison(
-                candidate_id, 
-                opponent_id, 
-                winner, 
-                reasoning
-            )
-            
-            if winner == 'a':
-                wins += 1
-            elif winner == 'b':
-                losses += 1
-            else:
-                ties += 1
-            
-            if verbose:
-                print(f"  vs {opponent_id}: {winner} (scores: {score_a:.2f} vs {score_b:.2f})")
-        
+                    print(f"  vs {opponent_id}: {winner} (scores: {score_a:.2f} vs {score_b:.2f})")
+
+        run_comparisons(phase1_opponents)
+        neighbor_ids = engine.get_neighbor_candidates(candidate_id, n=n_neighbors)
+        if neighbor_ids and verbose:
+            print(f"\nPhase 2: {len(neighbor_ids)} neighbors (break ties)...")
+        run_comparisons(neighbor_ids)
+        if verbose:
+            print(f"\nTotal: {wins}W-{losses}L-{ties}T")
+
         final_score = engine.get_score(candidate_id)
         stats = engine.get_stats(candidate_id)
         judge_stats = judge.get_statistics()
