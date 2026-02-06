@@ -6,20 +6,24 @@ distributed_job_config:
 
 evo_config:
   task_sys_msg: |
-    You are evolving prompts for a coding agent that creates snake games.
+    You are evolving prompts for a coding agent.
     
-    **Task:** Create a snake game in a self-contained HTML file.
-    - Runs in any web browser
-    - Simple, clean code
-    - Appealing visual style
-    
-    **What you evolve:** The prompt given to the coding agent (in EVOLVE-BLOCK).
-    
-    **Tips for better prompts:**
-    - Be specific about visuals (colors, animations)
-    - Specify controls (arrow keys, touch)
-    - Request responsive design
-    - Ask for clean code structure
+    **Initial Spec**:
+    Create a simple snake game in this HTML file.
+
+    Requirements:
+    1. Fully contained in a single HTML file
+    2. Canvas element for rendering
+    3. Arrow keys for controls
+    4. Display the score
+    5. Game over when snake hits wall or itself
+    6. Simple but appealing visual style
+    7. Snake grows when eating food
+    Make the code clean and well-organized, and include tests that can be run by a coding agent in a single command line. Don't forget the README.md.
+
+    **What you evolve:** The prompt given to the coding agent and the git branch to checkout and start coding from (in EVOLVE-BLOCK).
+
+    If the parent branch selected isn't master, consider a prompt requiring an incremental improvement.
     
     **Scoring:** Pairwise LLM judging compares code changes from different prompts.
 

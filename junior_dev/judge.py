@@ -127,9 +127,9 @@ Reply in this order (reasoning first, then verdict—this improves accuracy):
 
 # Your task
 
-Each candidate above is a **diff** (patch). Which diff, when applied to the base, would **better achieve the evolution objective**? Judge the outcome (resulting behavior/features), not diff size. Reply in this order:
+Each candidate above is a **diff** (patch). Which diff, when applied to the base, would **better achieve the evolution objective**? Judge the outcome (resulting behavior/features), not diff size. Reply in this order and format:
 1. Reasoning: [Your explanation of how each diff meets the objective and which outcome is better]
-2. Winner: [Candidate 1 / Candidate 2 / Tie]
+2. Winner: [Candidate 1 / Candidate 2]
 3. Confidence: [High / Medium / Low]
 """
         return prompt
@@ -176,4 +176,4 @@ Reasoning: This is a mock response for testing. Cannot judge diffs without a rea
     def reset_statistics(self):
         self.total_comparisons = 0
         self.total_cost = 0.0
-        
+

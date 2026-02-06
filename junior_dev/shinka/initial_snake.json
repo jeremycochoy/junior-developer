@@ -1,6 +1,6 @@
 // EVOLVE-BLOCK-START
 {
   "parent_branch": "master",
-  "prompt": "Create a simple snake game in this HTML file.\n\nRequirements:\n1. Fully contained in a single HTML file\n2. Canvas element for rendering\n3. Arrow keys for controls\n4. Display the score\n5. Game over when snake hits wall or itself\n6. Simple but appealing visual style\n7. Snake grows when eating food\n\nMake the code clean and well-organized."
+    "prompt": "Create a simple snake game in this HTML file.\n\nRequirements:\n1. Fully contained in a single HTML file\n2. Canvas element for rendering\n3. Arrow keys for controls\n4. Display the score\n5. Game over when snake hits wall or itself\n6. Simple but appealing visual style\n7. Snake grows when eating food\n\nMake the code clean and well-organized, and include tests that can be run by a coding agent in a single command line. Don't forget the README.md."
 }
 // EVOLVE-BLOCK-END
