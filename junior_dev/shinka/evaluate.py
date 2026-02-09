@@ -1,4 +1,5 @@
 import os
+import sys
 import json
 import sqlite3
 import subprocess
@@ -9,11 +10,15 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+project_root = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(project_root))
+
 from junior_dev.scoring import BTMMScoringEngine
 from junior_dev.judge import PairwiseJudge
 from junior_dev.git_manager import GitManager
 from junior_dev.coding_agent import CodingAgent, AgentResult
 from junior_dev.config import load_config, get_config_value
+
 
 
 def _extract_json_from_evolve_block(content: str) -> str:
@@ -423,7 +428,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--llm_judge_model",
         type=str,
-        default="gpt-4",
+        default="gpt-4o-mini",
         help="LLM model for pairwise judging"
     )
     parser.add_argument(
@@ -454,7 +459,7 @@ if __name__ == "__main__":
         "--config",
         type=str,
         default=None,
-        help="Path to config YAML file (default: configs/agent_config.yaml)"
+        help="Path to config YAML file (optional, uses built-in defaults if not provided)"
     )
     
     args = parser.parse_args()

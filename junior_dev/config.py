@@ -5,11 +5,9 @@ import yaml
 
 def load_config(config_path: Optional[str] = None) -> Dict[str, Any]:
     if config_path is None:
-        project_root = Path(__file__).parent.parent
-        config_path = project_root / "configs" / "agent_config.yaml"
-    else:
-        config_path = Path(config_path)
+        return {}
     
+    config_path = Path(config_path)
     if not config_path.exists():
         return {}
     

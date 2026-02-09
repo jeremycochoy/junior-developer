@@ -1,8 +1,10 @@
 distributed_job_config:
   _target_: shinka.launch.SlurmCondaJobConfig
-  eval_program_path: "eval_snake.py"
+  eval_program_path: "junior_dev/shinka/evaluate.py"
   conda_env: ""
   modules: []
+  extra_cmd_args:
+    target_codebase: "${output_dir}/code"
 
 evo_config:
   task_sys_msg: |
@@ -28,12 +30,14 @@ evo_config:
     **Scoring:** Pairwise LLM judging compares code changes from different prompts.
 
   language: "json"
-  init_program_path: "junior_dev/shinka/initial_snake.json"
+  init_program_path: "junior_dev/shinka/initial.json"
   job_type: "local"
+  results_dir: "${output_dir}/data"
 
 evaluate_function:
   _target_: junior_dev.shinka.evaluate.main
   program_path: ???
   results_dir: ???
+  target_codebase: "${output_dir}/code"
 
 exp_name: "snake_game"
