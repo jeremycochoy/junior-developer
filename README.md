@@ -33,10 +33,9 @@ CURSOR_API_KEY=...
 ### 3. Run Snake Game Evolution
 
 ```bash
-# Install in Shinka environment
+# Load hinka environment
 cd /path/to/ShinkaEvolve
-source venv/bin/activate
-pip install -e /path/to/JuniorDeveloper
+source .venv/bin/activate
 
 # Run evolution (12 generations, 13 nodes)
 cd /path/to/JuniorDeveloper
