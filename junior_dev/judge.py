@@ -46,11 +46,11 @@ class PairwiseJudge:
 
 What you see: Each candidate is a **git-style diff** (lines starting with +/-, showing additions and deletions from the base). Do not treat them as full source files. Judge based on what the **resulting code would do** and how well it meets the objective.
 
-Evaluation criteria (in order of importance): How well the **resulting change** fulfills the stated objective, correctness and completeness of the change, then code quality. Prefer the diff that leads to a better outcome (e.g. better game, requested features, clearer UX). Do NOT prefer a diff merely because it is shorter or has fewer lines—prefer the one that better achieves the goal. If both are equally good, say Tie.
+Evaluation criteria (in order of importance): How well the **resulting change** fulfills the stated objective, correctness and completeness of the change, then code quality. Prefer the diff that leads to a better outcome (e.g. better game, requested features, clearer UX). Do NOT prefer a diff merely because it is shorter or has fewer lines—prefer the one that better achieves the goal. You MUST choose one winner—ties are not allowed.
 
 Reply in this order (reasoning first, then verdict—this improves accuracy):
 1. Reasoning: [Your explanation of how each diff meets the evolution objective and which outcome is better]
-2. Winner: [Candidate 1 / Candidate 2 / Tie]
+2. Winner: [Candidate 1 / Candidate 2]
 3. Confidence: [High / Medium / Low]"""
     
     def compare(self, task_spec: str, candidate_a: str, candidate_b: str, 
@@ -60,24 +60,38 @@ Reply in this order (reasoning first, then verdict—this improves accuracy):
         
         user_prompt = self._build_prompt(task_spec, first, second, context)
         
-        if self.llm:
-            response = self.llm.query(msg=user_prompt, system_msg=self.system_prompt)
-            if response is None:
+        # Try up to 2 times to get a valid (non-tie) result
+        max_attempts = 2
+        for attempt in range(max_attempts):
+            if self.llm:
+                response = self.llm.query(msg=user_prompt, system_msg=self.system_prompt)
+                if response is None:
+                    llm_response = self._mock_llm_response(first, second)
+                    cost = 0.0
+                else:
+                    llm_response = response.content
+                    cost = response.cost if hasattr(response, 'cost') else 0.0
+            else:
                 llm_response = self._mock_llm_response(first, second)
                 cost = 0.0
-            else:
-                llm_response = response.content
-                cost = response.cost if hasattr(response, 'cost') else 0.0
-        else:
-            llm_response = self._mock_llm_response(first, second)
-            cost = 0.0
-        
-        winner_presented, reasoning, _ = self._parse_response(llm_response)
+            
+            winner_presented, reasoning, _ = self._parse_response(llm_response)
+            
+            # Retry if tie was returned (judge failed to choose)
+            if winner_presented == 'tie' and attempt < max_attempts - 1:
+                continue
+            
+            # If still tie after retries, randomly pick a winner
+            if winner_presented == 'tie':
+                winner_presented = random.choice(['first', 'second'])
+                reasoning = f"{reasoning}\n\n[Note: Judge failed to choose after {max_attempts} attempts; randomly selected winner]"
+            
+            break
         
         if swapped:
-            winner = {'first': 'b', 'second': 'a', 'tie': 'tie'}[winner_presented]
+            winner = {'first': 'b', 'second': 'a'}[winner_presented]
         else:
-            winner = {'first': 'a', 'second': 'b', 'tie': 'tie'}[winner_presented]
+            winner = {'first': 'a', 'second': 'b'}[winner_presented]
         
         self.total_comparisons += 1
         self.total_cost += cost
@@ -140,12 +154,13 @@ Each candidate above is a **diff** (patch). Which diff, when applied to the base
         if reasoning_match:
             reasoning = reasoning_match.group(1).strip()
 
-        winner = "tie"
-        winner_match = re.search(r'Winner:\s*(Candidate\s*1|Candidate\s*2|Tie)', response, re.IGNORECASE)
+        winner = "tie"  # Default to tie, will be handled by retry logic in compare()
+        winner_match = re.search(r'Winner:\s*(Candidate\s*1|Candidate\s*2)', response, re.IGNORECASE)
         if winner_match:
             winner_text = winner_match.group(1).lower()
-            winner = "first" if "1" in winner_text else ("second" if "2" in winner_text else "tie")
+            winner = "first" if "1" in winner_text else "second"
         else:
+            # Fallback: try to extract winner from reasoning
             if re.search(r'\bcandidate\s*1\b.*\bbetter\b', response, re.IGNORECASE):
                 winner = "first"
             elif re.search(r'\bcandidate\s*2\b.*\bbetter\b', response, re.IGNORECASE):
@@ -160,10 +175,11 @@ Each candidate above is a **diff** (patch). Which diff, when applied to the base
         return winner, reasoning, confidence
     
     def _mock_llm_response(self, first: str, second: str) -> str:
-        # Mock: do not prefer by diff size; treat as tie so diff-based judging is not biased.
-        return """Winner: Tie
+        # Mock: randomly pick a winner to avoid bias
+        winner_num = random.choice([1, 2])
+        return f"""Winner: Candidate {winner_num}
 Confidence: Low
-Reasoning: This is a mock response for testing. Cannot judge diffs without a real LLM; treat as equivalent."""
+Reasoning: This is a mock response for testing. Cannot judge diffs without a real LLM; randomly selected winner."""
     
     def get_statistics(self) -> Dict[str, Any]:
         return {

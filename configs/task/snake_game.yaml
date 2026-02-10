@@ -1,3 +1,9 @@
+evaluate_function:
+  _target_: junior_dev.shinka.evaluate.main
+  program_path: ???
+  results_dir: ???
+  target_codebase: "${output_dir}/code"
+
 distributed_job_config:
   _target_: shinka.launch.SlurmCondaJobConfig
   eval_program_path: "junior_dev/shinka/evaluate.py"
@@ -23,7 +29,9 @@ evo_config:
     7. Snake grows when eating food
     Make the code clean and well-organized, and include tests that can be run by a coding agent in a single command line. Don't forget the README.md.
 
-    **What you evolve:** The prompt given to the coding agent and the git branch to checkout and start coding from (in EVOLVE-BLOCK).
+    **What you evolve:** The prompt given to the coding agent (text instructions ONLY - NO CODE) and the git branch to checkout and start coding from (in EVOLVE-BLOCK).
+
+    **IMPORTANT:** When using SEARCH/REPLACE edits, only search for requirement text descriptions, never search for code snippets.
 
     If the parent branch selected isn't master, consider a prompt requiring an incremental improvement.
     
@@ -32,12 +40,5 @@ evo_config:
   language: "json"
   init_program_path: "junior_dev/shinka/initial.json"
   job_type: "local"
-  results_dir: "${output_dir}/data"
-
-evaluate_function:
-  _target_: junior_dev.shinka.evaluate.main
-  program_path: ???
-  results_dir: ???
-  target_codebase: "${output_dir}/code"
 
 exp_name: "snake_game"

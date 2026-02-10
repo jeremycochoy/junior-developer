@@ -42,7 +42,22 @@ def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
     candidate_id = f"{path.parent.name}_{path.stem}"
     
     if program_path.endswith('.json'):
-        with open(program_path, 'r', encoding='utf-8') as f:
+        if not path.exists():
+            # Try to load original.json (parent before failed mutation)
+            original_path = path.parent / "original.json"
+            if original_path.exists():
+                print(f"Warning: main.json not found for {candidate_id} (patch likely failed)")
+                print(f"         Using parent prompt from original.json as fallback")
+                path = original_path
+                # Mark this as a failed mutation attempt
+                candidate_id = f"{candidate_id}_failed_patch"
+            else:
+                # No fallback available - return empty prompt to trigger skip
+                print(f"Error: Neither main.json nor original.json found for {candidate_id}")
+                print(f"       Cannot evaluate this generation")
+                return "", candidate_id, None
+        
+        with open(path, 'r', encoding='utf-8') as f:
             raw = f.read()
         json_str = _extract_json_from_evolve_block(raw)
         data = json.loads(json_str)
@@ -65,6 +80,37 @@ def _load_program(program_path: str) -> Tuple[str, str, Optional[str]]:
         candidate_id = module.CANDIDATE_ID
     
     return evolved_prompt, candidate_id, parent_branch
+
+
+def _truncate_diff(diff: str, max_chars: int = 80000) -> str:
+    if len(diff) <= max_chars:
+        return diff
+    
+    keep_each = max_chars // 2
+    truncated_size = len(diff) - max_chars
+    truncated = (
+        diff[:keep_each] + 
+        f"\n\n... [TRUNCATED {truncated_size} characters / {truncated_size // 1024}KB for brevity] ...\n\n" +
+        diff[-keep_each:]
+    )
+    return truncated
+
+
+def _get_candidate_parent_branch(candidate_id: str, results_dir_parent: Path) -> Optional[str]:
+    gen_dir = results_dir_parent / candidate_id.rsplit('_', 1)[0]
+    main_json = gen_dir / "main.json"
+    
+    if not main_json.exists():
+        return None
+    
+    try:
+        with open(main_json, 'r', encoding='utf-8') as f:
+            raw = f.read()
+        json_str = _extract_json_from_evolve_block(raw)
+        data = json.loads(json_str)
+        return data.get('parent_branch')
+    except Exception:
+        return None
 
 
 def _sync_bt_scores_to_shinka_db(
@@ -173,6 +219,22 @@ def evaluate_coding_agent_prompt(
     sync_all_scores: Optional[List[Tuple[str, float, Dict[str, Any]]]] = None
     sync_branch_prefix: Optional[str] = None
 
+    if not evolved_prompt:
+        error = "Patch application failed and no fallback available (missing main.json and original.json)"
+        print(f"Skipping evaluation for {candidate_id}: {error}")
+        metrics = {
+            "combined_score": 0.0,
+            "runtime": time.time() - start_t,
+            "public": {"branch_name": "", "error": error},
+            "private": {},
+        }
+        Path(results_dir).mkdir(parents=True, exist_ok=True)
+        with open(os.path.join(results_dir, "correct.json"), "w") as f:
+            json.dump({"correct": False, "error": error}, f, indent=4)
+        with open(os.path.join(results_dir, "metrics.json"), "w") as f:
+            json.dump(metrics, f, indent=4)
+        return metrics
+
     if program_path.endswith('.json'):
         if parent_branch is None or (isinstance(parent_branch, str) and not parent_branch.strip()):
             correct = False
@@ -255,18 +317,38 @@ def evaluate_coding_agent_prompt(
 
         wins = 0
         losses = 0
-        ties = 0
 
         def run_comparisons(opponent_ids: List[str]) -> None:
-            nonlocal wins, losses, ties
+            nonlocal wins, losses
             for opponent_id in opponent_ids:
                 opponent_branch = f"{branch_prefix}{opponent_id}"
                 if not git_manager.branch_exists(opponent_branch):
                     if verbose:
                         print(f"  Skipping {opponent_id}: branch {opponent_branch} does not exist")
                     continue
-                diff_current = git_manager.get_diff(default_branch, branch_name)
-                diff_opponent = git_manager.get_diff(default_branch, opponent_branch)
+                
+                if parent_branch and parent_branch != default_branch:
+                    diff_current = git_manager.get_diff(parent_branch, branch_name)
+                    diff_base_branch = parent_branch
+                else:
+                    diff_current = git_manager.get_diff(default_branch, branch_name)
+                    diff_base_branch = default_branch
+                
+                opponent_parent = _get_candidate_parent_branch(opponent_id, Path(results_dir).parent)
+                if opponent_parent and opponent_parent != default_branch:
+                    diff_opponent = git_manager.get_diff(opponent_parent, opponent_branch)
+                else:
+                    diff_opponent = git_manager.get_diff(default_branch, opponent_branch)
+                
+                original_current_size = len(diff_current)
+                original_opponent_size = len(diff_opponent)
+                diff_current = _truncate_diff(diff_current, max_chars=80000)
+                diff_opponent = _truncate_diff(diff_opponent, max_chars=80000)
+                
+                if verbose and (original_current_size > 80000 or original_opponent_size > 80000):
+                    print(f"  Note: Truncated diffs (current: {original_current_size//1024}KB -> {len(diff_current)//1024}KB, "
+                          f"opponent: {original_opponent_size//1024}KB -> {len(diff_opponent)//1024}KB)")
+                
                 judge_context = {
                     "evolution_objective": task_spec,
                     "branch_a": branch_name,
@@ -285,18 +367,16 @@ def evaluate_coding_agent_prompt(
                     wins += 1
                 elif winner == "b":
                     losses += 1
-                else:
-                    ties += 1
                 if verbose:
                     print(f"  vs {opponent_id}: {winner} (scores: {score_a:.2f} vs {score_b:.2f})")
 
         run_comparisons(phase1_opponents)
         neighbor_ids = engine.get_neighbor_candidates(candidate_id, n=n_neighbors)
         if neighbor_ids and verbose:
-            print(f"\nPhase 2: {len(neighbor_ids)} neighbors (break ties)...")
+            print(f"\nPhase 2: {len(neighbor_ids)} neighbors...")
         run_comparisons(neighbor_ids)
         if verbose:
-            print(f"\nTotal: {wins}W-{losses}L-{ties}T")
+            print(f"\nTotal: {wins}W-{losses}L")
 
         final_score = engine.get_score(candidate_id)
         stats = engine.get_stats(candidate_id)
@@ -311,7 +391,6 @@ def evaluate_coding_agent_prompt(
                 "bt_score": float(final_score),
                 "wins": wins,
                 "losses": losses,
-                "ties": ties,
                 "win_rate": stats.win_rate if stats else 0.0,
                 "total_comparisons": stats.num_comparisons if stats else 0,
                 "branch_name": branch_name,
@@ -329,7 +408,7 @@ def evaluate_coding_agent_prompt(
         if verbose:
             print(f"\n{'='*70}")
             print(f"Final BT-MM Score: {final_score:.2f}")
-            print(f"Record: {wins}W-{losses}L-{ties}T")
+            print(f"Record: {wins}W-{losses}L")
             print(f"{'='*70}\n")
         
     except Exception as e:
@@ -440,7 +519,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_comparisons",
         type=int,
-        default=3,
+        default=10,
         help="Number of pairwise comparisons per evaluation"
     )
     parser.add_argument(
