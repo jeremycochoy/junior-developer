@@ -354,6 +354,8 @@ def evaluate_coding_agent_prompt(
                     "branch_a": branch_name,
                     "branch_b": f"{branch_prefix}{opponent_id}",
                 }
+                is_duplicate = engine.comparison_exists(candidate_id, opponent_id)
+                
                 winner, reasoning = judge.compare(
                     task_spec=task_spec,
                     candidate_a=diff_current,
@@ -363,12 +365,16 @@ def evaluate_coding_agent_prompt(
                 score_a, score_b = engine.record_comparison(
                     candidate_id, opponent_id, winner, reasoning
                 )
-                if winner == "a":
-                    wins += 1
-                elif winner == "b":
-                    losses += 1
+                
+                if not is_duplicate:
+                    if winner == "a":
+                        wins += 1
+                    elif winner == "b":
+                        losses += 1
+                
                 if verbose:
-                    print(f"  vs {opponent_id}: {winner} (scores: {score_a:.2f} vs {score_b:.2f})")
+                    duplicate_marker = " (duplicate)" if is_duplicate else ""
+                    print(f"  vs {opponent_id}: {winner} (scores: {score_a:.2f} vs {score_b:.2f}){duplicate_marker}")
 
         run_comparisons(phase1_opponents)
         neighbor_ids = engine.get_neighbor_candidates(candidate_id, n=n_neighbors)
