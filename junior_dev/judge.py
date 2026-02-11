@@ -1,6 +1,7 @@
 import random
 import re
 import time
+import traceback
 from typing import Tuple, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 
@@ -9,6 +10,21 @@ try:
     SHINKA_AVAILABLE = True
 except ImportError:
     SHINKA_AVAILABLE = False
+
+SWAP_PROBABILITY = 0.5
+MAX_TIE_RETRIES = 2
+CONFIDENCE_MAP = {"high": 0.9, "medium": 0.6, "low": 0.3}
+MAX_CONTEXT_VALUE_LENGTH = 1000
+JUDGE_SYSTEM_PROMPT = """You are an expert software architect and code reviewer. You compare two **diffs** (patch/changes from a common base) and decide which, when applied, would **better achieve the evolution objective**.
+
+What you see: Each candidate is a **git-style diff** (lines starting with +/-, showing additions and deletions from the base). Do not treat them as full source files. Judge based on what the **resulting code would do** and how well it meets the objective.
+
+Evaluation criteria (in order of importance): How well the **resulting change** fulfills the stated objective, correctness and completeness of the change, then code quality. Prefer the diff that leads to a better outcome (e.g. better game, requested features, clearer UX). Do NOT prefer a diff merely because it is shorter or has fewer lines—prefer the one that better achieves the goal. You MUST choose one winner—ties are not allowed.
+
+Reply in this order (reasoning first, then verdict—this improves accuracy):
+1. Reasoning: [Your explanation of how each diff meets the evolution objective and which outcome is better]
+2. Winner: [Candidate 1 / Candidate 2]
+3. Confidence: [High / Medium / Low]"""
 
 
 @dataclass
@@ -19,18 +35,17 @@ class JudgmentResult:
     llm_response: str
     cost: float
     timestamp: float
-    
+
     def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data['timestamp'] = time.time()
-        return data
+        return asdict(self)
 
 
 class PairwiseJudge:
-    def __init__(self, llm_model: str = "gpt-4o-mini", system_prompt: Optional[str] = None,
+
+    def __init__(self, llm_model: str = "gpt-4o-2024-08-06", system_prompt: Optional[str] = None,
                  temperature: float = 0.0, max_tokens: int = 2000):
         self.llm_model = llm_model
-        self.system_prompt = system_prompt or self._default_system_prompt()
+        self.system_prompt = system_prompt or JUDGE_SYSTEM_PROMPT
         self.temperature = temperature
         self.max_tokens = max_tokens
 
@@ -40,78 +55,66 @@ class PairwiseJudge:
             self.llm = None
         self.total_comparisons = 0
         self.total_cost = 0.0
-    
-    def _default_system_prompt(self) -> str:
-        return """You are an expert software architect and code reviewer. You compare two **diffs** (patch/changes from a common base) and decide which, when applied, would **better achieve the evolution objective**.
 
-What you see: Each candidate is a **git-style diff** (lines starting with +/-, showing additions and deletions from the base). Do not treat them as full source files. Judge based on what the **resulting code would do** and how well it meets the objective.
-
-Evaluation criteria (in order of importance): How well the **resulting change** fulfills the stated objective, correctness and completeness of the change, then code quality. Prefer the diff that leads to a better outcome (e.g. better game, requested features, clearer UX). Do NOT prefer a diff merely because it is shorter or has fewer lines—prefer the one that better achieves the goal. You MUST choose one winner—ties are not allowed.
-
-Reply in this order (reasoning first, then verdict—this improves accuracy):
-1. Reasoning: [Your explanation of how each diff meets the evolution objective and which outcome is better]
-2. Winner: [Candidate 1 / Candidate 2]
-3. Confidence: [High / Medium / Low]"""
-    
-    def compare(self, task_spec: str, candidate_a: str, candidate_b: str, 
+    def compare(self, task_spec: str, candidate_a: str, candidate_b: str,
                 context: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
-        swapped = random.random() < 0.5
+        swapped = random.random() < SWAP_PROBABILITY
         first, second = (candidate_b, candidate_a) if swapped else (candidate_a, candidate_b)
-        
+
         user_prompt = self._build_prompt(task_spec, first, second, context)
-        
-        # Try up to 2 times to get a valid (non-tie) result
-        max_attempts = 2
-        for attempt in range(max_attempts):
-            if self.llm:
-                response = self.llm.query(msg=user_prompt, system_msg=self.system_prompt)
-                if response is None:
-                    llm_response = self._mock_llm_response(first, second)
-                    cost = 0.0
-                else:
-                    llm_response = response.content
-                    cost = response.cost if hasattr(response, 'cost') else 0.0
-            else:
-                llm_response = self._mock_llm_response(first, second)
-                cost = 0.0
-            
+
+        cost = 0.0
+        winner_presented = "tie"
+        reasoning = ""
+        llm_response = ""
+
+        for attempt in range(MAX_TIE_RETRIES):
+            llm_response, cost = self._query_llm(user_prompt)
             winner_presented, reasoning, _ = self._parse_response(llm_response)
-            
-            # Retry if tie was returned (judge failed to choose)
-            if winner_presented == 'tie' and attempt < max_attempts - 1:
-                continue
-            
-            # If still tie after retries, randomly pick a winner
-            if winner_presented == 'tie':
-                winner_presented = random.choice(['first', 'second'])
-                reasoning = f"{reasoning}\n\n[Note: Judge failed to choose after {max_attempts} attempts; randomly selected winner]"
-            
-            break
-        
+
+            if winner_presented != "tie":
+                break
+
+        if winner_presented == "tie":
+            winner_presented = random.choice(["first", "second"])
+            reasoning = f"{reasoning}\n\n[Note: Judge failed to choose after {MAX_TIE_RETRIES} attempts; randomly selected winner]"
+
         if swapped:
-            winner = {'first': 'b', 'second': 'a'}[winner_presented]
+            winner = {"first": "b", "second": "a"}[winner_presented]
         else:
-            winner = {'first': 'a', 'second': 'b'}[winner_presented]
-        
+            winner = {"first": "a", "second": "b"}[winner_presented]
+
         self.total_comparisons += 1
         self.total_cost += cost
-        
+
         return winner, reasoning
-    
+
     def compare_detailed(self, task_spec: str, candidate_a: str, candidate_b: str,
-                        context: Optional[Dict[str, Any]] = None) -> JudgmentResult:
+                         context: Optional[Dict[str, Any]] = None) -> JudgmentResult:
+        cost_before = self.total_cost
         winner, reasoning = self.compare(task_spec, candidate_a, candidate_b, context)
+        cost_for_this_comparison = self.total_cost - cost_before
+
         return JudgmentResult(
             winner=winner,
             reasoning=reasoning,
-            confidence=0.8,
+            confidence=CONFIDENCE_MAP.get("medium", 0.6),
             llm_response="",
-            cost=self.total_cost,
+            cost=cost_for_this_comparison,
             timestamp=time.time(),
         )
-    
+
+    def _query_llm(self, user_prompt: str) -> Tuple[str, float]:
+        if self.llm:
+            response = self.llm.query(msg=user_prompt, system_msg=self.system_prompt)
+            if response is None:
+                return self._mock_llm_response(), 0.0
+            cost = response.cost if hasattr(response, "cost") else 0.0
+            return response.content, cost
+        return self._mock_llm_response(), 0.0
+
     def _build_prompt(self, task_spec: str, first: str, second: str,
-                     context: Optional[Dict[str, Any]] = None) -> str:
+                      context: Optional[Dict[str, Any]] = None) -> str:
         objective = task_spec
         if context and "evolution_objective" in context:
             objective = context["evolution_objective"]
@@ -132,7 +135,7 @@ Reply in this order (reasoning first, then verdict—this improves accuracy):
             for key, value in context.items():
                 if key == "evolution_objective":
                     continue
-                if isinstance(value, str) and len(value) < 1000:
+                if isinstance(value, str) and len(value) < MAX_CONTEXT_VALUE_LENGTH:
                     prompt += f"\n# {key}\n{value}\n"
                 elif isinstance(value, (int, float, bool)):
                     prompt += f"\n**{key}**: {value}\n"
@@ -147,49 +150,46 @@ Each candidate above is a **diff** (patch). Which diff, when applied to the base
 3. Confidence: [High / Medium / Low]
 """
         return prompt
-    
+
     def _parse_response(self, response: str) -> Tuple[str, str, float]:
         reasoning = response
         reasoning_match = re.search(r'Reasoning:\s*(.+?)(?=Winner:|Confidence:|\Z)', response, re.IGNORECASE | re.DOTALL)
         if reasoning_match:
             reasoning = reasoning_match.group(1).strip()
 
-        winner = "tie"  # Default to tie, will be handled by retry logic in compare()
+        winner = "tie"
         winner_match = re.search(r'Winner:\s*(Candidate\s*1|Candidate\s*2)', response, re.IGNORECASE)
         if winner_match:
             winner_text = winner_match.group(1).lower()
             winner = "first" if "1" in winner_text else "second"
         else:
-            # Fallback: try to extract winner from reasoning
+            # Fallback: try to extract winner from reasoning text
             if re.search(r'\bcandidate\s*1\b.*\bbetter\b', response, re.IGNORECASE):
                 winner = "first"
             elif re.search(r'\bcandidate\s*2\b.*\bbetter\b', response, re.IGNORECASE):
                 winner = "second"
 
-        confidence = 0.5
+        confidence = CONFIDENCE_MAP["medium"]
         confidence_match = re.search(r'Confidence:\s*(High|Medium|Low)', response, re.IGNORECASE)
         if confidence_match:
-            conf_text = confidence_match.group(1).lower()
-            confidence = {'high': 0.9, 'medium': 0.6, 'low': 0.3}[conf_text]
+            confidence = CONFIDENCE_MAP[confidence_match.group(1).lower()]
 
         return winner, reasoning, confidence
-    
-    def _mock_llm_response(self, first: str, second: str) -> str:
-        # Mock: randomly pick a winner to avoid bias
+
+    def _mock_llm_response(self) -> str:
         winner_num = random.choice([1, 2])
         return f"""Winner: Candidate {winner_num}
 Confidence: Low
 Reasoning: This is a mock response for testing. Cannot judge diffs without a real LLM; randomly selected winner."""
-    
+
     def get_statistics(self) -> Dict[str, Any]:
         return {
-            'total_comparisons': self.total_comparisons,
-            'total_cost': self.total_cost,
-            'average_cost': self.total_cost / max(self.total_comparisons, 1),
-            'model': self.llm_model,
+            "total_comparisons": self.total_comparisons,
+            "total_cost": self.total_cost,
+            "average_cost": self.total_cost / max(self.total_comparisons, 1),
+            "model": self.llm_model,
         }
-    
+
     def reset_statistics(self):
         self.total_comparisons = 0
         self.total_cost = 0.0
-

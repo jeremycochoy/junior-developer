@@ -10,7 +10,7 @@ evo_config:
   max_parallel_jobs: 1
   max_patch_attempts: 10
   llm_models:
-    - "gpt-4o-mini"
+    - "gpt-4o-2024-08-06"
   llm_dynamic_selection: null
   embedding_model: "text-embedding-3-small"
   results_dir: ${output_dir}
