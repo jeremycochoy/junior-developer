@@ -236,20 +236,49 @@ def _sync_bt_scores_to_shinka_db(
 
 # ── Target codebase bootstrap ──────────────────────────────────────
 
-def _ensure_target_codebase(target_codebase: str, verbose: bool = True) -> None:
+def _ensure_target_codebase(
+    target_codebase: str,
+    source_codebase: Optional[str] = None,
+    verbose: bool = True,
+) -> None:
+    
     path = Path(target_codebase).resolve()
-    path.mkdir(parents=True, exist_ok=True)
 
+    if (path / ".git").exists():
+        if verbose:
+            print(f"Using existing repo: {path}")
+        return
+
+    if source_codebase:
+        source = Path(source_codebase).resolve()
+        if not (source / ".git").exists():
+            raise ValueError(f"source_codebase is not a git repo: {source}")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists():
+            try:
+                path.rmdir()
+            except OSError:
+                pass
+        if verbose:
+            print(f"Cloning {source} → {path} ...")
+        subprocess.run(
+            ["git", "clone", str(source), str(path)],
+            check=True, capture_output=True, text=True,
+        )
+        if verbose:
+            print(f"Cloned source repo into: {path}")
+        return
+
+    path.mkdir(parents=True, exist_ok=True)
     index_html = path / "index.html"
     if not index_html.exists():
         index_html.write_text(SCAFFOLD_HTML)
 
-    if not (path / ".git").exists():
-        subprocess.run(["git", "init"], cwd=path, check=True)
-        subprocess.run(["git", "add", "."], cwd=path, check=True)
-        subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=path, check=True)
-        if verbose:
-            print(f"Initialized git repo: {path}")
+    subprocess.run(["git", "init"], cwd=path, check=True)
+    subprocess.run(["git", "add", "."], cwd=path, check=True)
+    subprocess.run(["git", "commit", "-m", "Initial commit"], cwd=path, check=True)
+    if verbose:
+        print(f"Initialized new git repo: {path}")
 
 
 # ── Metrics / result files ──────────────────────────────────────────
@@ -379,6 +408,8 @@ def _resolve_config(
     agent_type: Optional[str],
     agent_timeout: Optional[int],
     llm_judge_temperature: Optional[float],
+    default_branch: Optional[str] = None,
+    branch_prefix: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         "task_spec": task_spec or get_config_value(config, "evaluation.task_spec", DEFAULT_TASK_SPEC),
@@ -391,8 +422,8 @@ def _resolve_config(
         "working_dir": get_config_value(config, "coding_agent.working_dir"),
         "agents_dir": get_config_value(config, "coding_agent.agents_dir", ".agents"),
         "pipeline_backend": get_config_value(config, "coding_agent.pipeline_backend", "cursor"),
-        "branch_prefix": get_config_value(config, "git.branch_prefix", DEFAULT_BRANCH_PREFIX),
-        "default_branch": get_config_value(config, "git.default_branch", DEFAULT_BRANCH),
+        "branch_prefix": branch_prefix or get_config_value(config, "git.branch_prefix", DEFAULT_BRANCH_PREFIX),
+        "default_branch": default_branch or get_config_value(config, "git.default_branch", DEFAULT_BRANCH),
     }
 
 
@@ -402,6 +433,7 @@ def evaluate_coding_agent_prompt(
     program_path: str,
     results_dir: str,
     target_codebase: str = "./example_codebase",
+    source_codebase: Optional[str] = None,
     task_spec: Optional[str] = None,
     bt_db_path: Optional[str] = None,
     llm_judge_model: Optional[str] = None,
@@ -409,6 +441,8 @@ def evaluate_coding_agent_prompt(
     agent_type: Optional[str] = None,
     agent_timeout: Optional[int] = None,
     llm_judge_temperature: Optional[float] = None,
+    default_branch: Optional[str] = None,
+    branch_prefix: Optional[str] = None,
     verbose: bool = True,
     config_path: Optional[str] = None,
 ):
@@ -417,7 +451,8 @@ def evaluate_coding_agent_prompt(
         config,
         task_spec=task_spec, bt_db_path=bt_db_path, llm_judge_model=llm_judge_model,
         num_comparisons=num_comparisons, agent_type=agent_type, agent_timeout=agent_timeout,
-        llm_judge_temperature=llm_judge_temperature,
+        llm_judge_temperature=llm_judge_temperature, default_branch=default_branch,
+        branch_prefix=branch_prefix,
     )
 
     start_time = time.time()
@@ -455,7 +490,7 @@ def evaluate_coding_agent_prompt(
             print(f"Evolved Prompt:\n{evolved_prompt[:200]}...")
 
         # ── Step 2: Prepare codebase and run agent ──────────────
-        _ensure_target_codebase(target_codebase, verbose=verbose)
+        _ensure_target_codebase(target_codebase, source_codebase=source_codebase, verbose=verbose)
         git_manager = GitManager(target_codebase)
 
         coding_agent = CodingAgent(
@@ -607,7 +642,9 @@ if __name__ == "__main__":
     parser.add_argument("--results_dir", type=str, default="results",
                         help="Directory to save evaluation results")
     parser.add_argument("--target_codebase", type=str, default="./example_codebase",
-                        help="Path to the codebase to refactor")
+                        help="Path to the working copy (per-run clone)")
+    parser.add_argument("--source_codebase", type=str, default=None,
+                        help="Path to the original repo to clone from (left untouched)")
     parser.add_argument("--task_spec", type=str, default=DEFAULT_TASK_SPEC,
                         help="Task specification for the coding agent")
     parser.add_argument("--bt_db_path", type=str, default="./bt_scores.db",
@@ -622,6 +659,10 @@ if __name__ == "__main__":
                         help="Coding agent type (only 'pipeline' is supported)")
     parser.add_argument("--agent_timeout", type=int, default=None,
                         help="Timeout for coding agent execution in seconds")
+    parser.add_argument("--default_branch", type=str, default=None,
+                        help="Base branch for diffs (e.g. 'master', 'main', 'development')")
+    parser.add_argument("--branch_prefix", type=str, default=None,
+                        help="Prefix for candidate branches (default: 'candidate_')")
     parser.add_argument("--config", type=str, default=None,
                         help="Path to config YAML file (optional)")
 
@@ -632,6 +673,7 @@ if __name__ == "__main__":
         program_path=args.program_path,
         results_dir=args.results_dir,
         target_codebase=args.target_codebase,
+        source_codebase=args.source_codebase,
         task_spec=args.task_spec,
         bt_db_path=args.bt_db_path,
         llm_judge_model=args.llm_judge_model,
@@ -639,5 +681,7 @@ if __name__ == "__main__":
         agent_type=args.agent_type,
         agent_timeout=args.agent_timeout,
         llm_judge_temperature=args.llm_judge_temperature,
+        default_branch=args.default_branch,
+        branch_prefix=args.branch_prefix,
         config_path=args.config,
     )

@@ -3,7 +3,8 @@ evaluate_function:
   program_path: ???
   results_dir: ???
   target_codebase: "${output_dir}/code"
-  default_branch: "master"
+  source_codebase: "/home/jupyter/rnd"
+  default_branch: "development"
 
 distributed_job_config:
   _target_: shinka.launch.SlurmCondaJobConfig
@@ -12,35 +13,25 @@ distributed_job_config:
   modules: []
   extra_cmd_args:
     target_codebase: "${output_dir}/code"
-    default_branch: "master"
+    source_codebase: "/home/jupyter/rnd"
+    default_branch: "development"
 
 evo_config:
   task_sys_msg: |
     You are evolving prompts for a coding agent.
-    
-    **Initial Spec**:
-    Create a simple snake game in this HTML file.
 
-    Requirements:
-    1. Fully contained in a single HTML file
-    2. Canvas element for rendering
-    3. Arrow keys for controls
-    4. Display the score
-    5. Game over when snake hits wall or itself
-    6. Simple but appealing visual style
-    7. Snake grows when eating food
-    Make the code clean and well-organized, and include tests that can be run by a coding agent in a single command line. Don't forget the README.md.
+    **Target codebase:** A Python trading research system with the main code in the `development` branch.
 
     **What you evolve:** The prompt given to the coding agent (text instructions ONLY - NO CODE) and the git branch to checkout and start coding from (in EVOLVE-BLOCK).
 
     **IMPORTANT:** When using SEARCH/REPLACE edits, only search for requirement text descriptions, never search for code snippets.
 
-    If the parent branch selected isn't master, consider a prompt requiring an incremental improvement.
-    
+    If the parent branch selected isn't development, consider a prompt requiring an incremental improvement.
+
     **Scoring:** Pairwise LLM judging compares code changes from different prompts.
 
   language: "json"
-  init_program_path: "junior_dev/shinka/initial.json"
+  init_program_path: "junior_dev/shinka/initial_rnd.json"
   job_type: "local"
 
-exp_name: "snake_game"
+exp_name: "rnd"

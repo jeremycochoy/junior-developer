@@ -1,0 +1,6 @@
+// EVOLVE-BLOCK-START
+{
+  "parent_branch": "development",
+  "prompt": "Analyse the codebase and think of what kind of refactoring would make sense to move all the visualization computed by the trainer and how to move them away to some visualization class, while maintaining compatibility of all the code and notebooks relying on the training for visualization. Think deeply of a clean design. Plan the change. Execute the change carefully. Before any change write test that will detect any breaking change. Then after the changes run the test to catch any error missing. Then review your code, then decide if this is enough or you can improve on it. You want the new code to be a lot more easy to maintain than the current one. You want to make sure agents and human will easily improve over this codebase. Your goal is to improve the overall quality of this project and help repay the technical debt. But you aren't allowed to break any feature."
+}
+// EVOLVE-BLOCK-END
