@@ -7,6 +7,11 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 
+DEFAULT_AGENT_TIMEOUT_SECONDS = 600
+POLL_INTERVAL_SECONDS = 0.1
+GIT_STATUS_TIMEOUT_SECONDS = 5
+THREAD_JOIN_TIMEOUT_SECONDS = 2
+
 
 @dataclass
 class AgentResult:
@@ -41,7 +46,7 @@ class CodingAgent:
     def __init__(
         self,
         agent_type: str = "pipeline",
-        timeout: int = 600,
+        timeout: int = DEFAULT_AGENT_TIMEOUT_SECONDS,
         working_dir: Optional[str] = None,
         agent_args: Optional[List[str]] = None,
         agents_dir: Optional[str] = None,
@@ -57,10 +62,10 @@ class CodingAgent:
         self.agents_dir = Path(agents_dir) if agents_dir else None
         self.pipeline_backend = pipeline_backend
 
-    def execute(self, prompt: str, files: Optional[List] = None) -> AgentResult:
+    def execute(self, prompt: str) -> AgentResult:
         start = time.time()
         try:
-            success, output, error, exit_code, changes = self._run_pipeline(prompt, files)
+            success, output, error, exit_code, changes = self._run_pipeline(prompt)
         except Exception as e:
             success, output, error, exit_code, changes = False, "", str(e), -1, False
 
@@ -97,7 +102,7 @@ class CodingAgent:
                 return arg.split("=", 1)[1]
         return os.getenv("AGENT_BACKEND", "cursor")
 
-    def _run_pipeline(self, prompt: str, files: Optional[List] = None) -> Tuple[bool, str, str, int, bool]:
+    def _run_pipeline(self, prompt: str) -> Tuple[bool, str, str, int, bool]:
         if not self.working_dir:
             return False, "", "pipeline agent requires working_dir", -1, False
 
@@ -122,8 +127,8 @@ class CodingAgent:
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             text=True, bufsize=1,
         )
-        out_lines = []
-        err_lines = []
+        out_lines: List[str] = []
+        err_lines: List[str] = []
         t_out = threading.Thread(target=_read_stream, args=(process.stdout, out_lines), daemon=True)
         t_err = threading.Thread(target=_read_stream, args=(process.stderr, err_lines), kwargs={"file": sys.stderr}, daemon=True)
         t_out.start()
@@ -136,10 +141,10 @@ class CodingAgent:
                 t_out.join(timeout=1)
                 t_err.join(timeout=1)
                 return -1, "".join(out_lines), f"Pipeline execution timed out after {self.timeout}s"
-            time.sleep(0.1)
+            time.sleep(POLL_INTERVAL_SECONDS)
 
-        t_out.join(timeout=2)
-        t_err.join(timeout=2)
+        t_out.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
+        t_err.join(timeout=THREAD_JOIN_TIMEOUT_SECONDS)
         return process.returncode or 0, "".join(out_lines), "".join(err_lines)
 
     def _git_has_changes(self) -> bool:
@@ -148,7 +153,8 @@ class CodingAgent:
         try:
             r = subprocess.run(
                 ["git", "status", "--porcelain"],
-                cwd=str(self.working_dir), capture_output=True, text=True, timeout=5,
+                cwd=str(self.working_dir), capture_output=True, text=True,
+                timeout=GIT_STATUS_TIMEOUT_SECONDS,
             )
             return bool(r.stdout.strip())
         except (subprocess.TimeoutExpired, FileNotFoundError):

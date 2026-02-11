@@ -7,6 +7,17 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from scipy.optimize import minimize
 
+# Score bounds for L-BFGS-B optimizer (prevents overflow)
+LOG_THETA_MIN = -15
+LOG_THETA_MAX = 15
+LOG_THETA_CLIP = 20
+
+DEFAULT_INITIAL_SCORE = 1.0
+SCORE_NORMALIZATION_TARGET = 1000
+EPSILON = 1e-12
+SQLITE_TIMEOUT_SECONDS = 30.0
+
+
 @dataclass
 class BTStats:
     candidate_id: str
@@ -57,7 +68,7 @@ def _bt_neg_log_likelihood(
     idx_map: Dict[str, int],
 ) -> float:
     """Negative log-likelihood for Bradley-Terry. log_theta keeps strengths positive."""
-    theta = np.exp(np.clip(log_theta, -20, 20)) + 1e-12
+    theta = np.exp(np.clip(log_theta, -LOG_THETA_CLIP, LOG_THETA_CLIP)) + EPSILON
     nll = 0.0
     for a, b, score in comparisons:
         i, j = idx_map[a], idx_map[b]
@@ -84,14 +95,14 @@ def compute_bt_mm_scipy(
         x0,
         args=(candidates, comparisons, idx_map),
         method="L-BFGS-B",
-        bounds=[(-15, 15)] * n,
+        bounds=[(LOG_THETA_MIN, LOG_THETA_MAX)] * n,
     )
     if not res.success:
         return {}
-    theta = np.exp(np.clip(res.x, -20, 20))
+    theta = np.exp(np.clip(res.x, -LOG_THETA_CLIP, LOG_THETA_CLIP))
     total = np.sum(theta)
     if total > 0:
-        theta = theta / total * 1000
+        theta = theta / total * SCORE_NORMALIZATION_TARGET
     return {candidates[i]: float(theta[i]) for i in range(n)}
 
 
@@ -118,19 +129,19 @@ def compute_bt_mm(
         theta_old = theta.copy()
         for i in range(n):
             if wins[i] == 0:
-                theta[i] = 1e-10
+                theta[i] = EPSILON
                 continue
             denom = sum(
                 comp_matrix[i, j] / (theta_old[i] + theta_old[j])
                 for j in range(n)
                 if comp_matrix[i, j] > 0
             )
-            theta[i] = wins[i] / denom if denom > 0 else 1e-10
+            theta[i] = wins[i] / denom if denom > 0 else EPSILON
         if np.max(np.abs(theta - theta_old)) < tol:
             break
     total = np.sum(theta)
     if total > 0:
-        theta = theta / total * 1000
+        theta = theta / total * SCORE_NORMALIZATION_TARGET
     return {candidates[i]: float(theta[i]) for i in range(n)}
 
 
@@ -144,13 +155,13 @@ class BTMMScoringEngine:
         self.db_path = Path(db_path)
         self.convergence_tol = convergence_tol
         self.max_iterations = max_iterations
-        self.initial_score = 1.0
+        self.initial_score = DEFAULT_INITIAL_SCORE
 
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self.conn = self._init_db()
-    
+
     def _init_db(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
+        conn = sqlite3.connect(str(self.db_path), timeout=SQLITE_TIMEOUT_SECONDS, check_same_thread=False)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA synchronous=NORMAL")

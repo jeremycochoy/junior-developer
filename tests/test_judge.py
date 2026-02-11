@@ -16,23 +16,24 @@ def test_initialization():
 
 def test_randomized_ordering():
     print("\n" + "="*70)
-    print("TEST 2: Randomized Ordering")
+    print("TEST 2: Randomized Ordering (Position Bias Check)")
     print("="*70)
     
     judge = PairwiseJudge(llm_model="mock")
     
-    first_wins = 0
-    iterations = 100
+    a_wins = 0
+    iterations = 200
     
     for i in range(iterations):
-        candidate_short = "short"
-        candidate_long = "this is much longer text"
-        winner, _ = judge.compare("Test task", candidate_short, candidate_long)
+        winner, _ = judge.compare("Test task", "candidate_a_text", "candidate_b_text")
         if winner == "a":
-            first_wins += 1
+            a_wins += 1
     
-    print(f"After {iterations} comparisons: Candidate A wins: {first_wins}")
-    assert first_wins > 80, f"Expected mostly A wins, got {first_wins}"
+    # Mock randomly picks Candidate 1 or 2, and swap is 50/50,
+    # so A wins should be roughly 50%. Allow 30-70% range.
+    a_rate = a_wins / iterations
+    print(f"After {iterations} comparisons: A wins = {a_wins} ({a_rate:.0%})")
+    assert 0.30 < a_rate < 0.70, f"Expected ~50% A wins, got {a_rate:.0%}"
     print("✓ Randomized ordering test passed\n")
 
 
@@ -51,14 +52,14 @@ def test_basic_comparison():
     print(f"Winner: {winner}")
     print(f"Reasoning: {reasoning[:100]}...")
     
-    assert winner in ("a", "b", "tie")
+    assert winner in ("a", "b"), "Ties are not allowed; mock always picks a winner"
     assert len(reasoning) > 0
     print("✓ Basic comparison test passed\n")
 
 
-def test_tie_handling():
+def test_no_ties():
     print("\n" + "="*70)
-    print("TEST 4: Tie Handling")
+    print("TEST 4: No Ties Allowed")
     print("="*70)
     
     judge = PairwiseJudge(llm_model="mock")
@@ -66,8 +67,8 @@ def test_tie_handling():
     winner, reasoning = judge.compare("Greet the world", candidate, candidate)
     
     print(f"Winner: {winner}")
-    assert winner == "tie"
-    print("✓ Tie handling test passed\n")
+    assert winner in ("a", "b"), "Ties are forbidden; judge must always pick a/b"
+    print("✓ No-ties test passed\n")
 
 
 def test_with_context():
@@ -85,7 +86,7 @@ def test_with_context():
     
     winner, reasoning = judge.compare("Implement fast function", "fast", "slow", context)
     print(f"Winner: {winner}")
-    assert winner in ("a", "b", "tie")
+    assert winner in ("a", "b"), "Must pick a winner"
     print("✓ Context test passed\n")
 
 
@@ -98,7 +99,7 @@ def test_response_parsing():
     test_cases = [
         ("Winner: Candidate 1\nConfidence: High\nReasoning: Better", "first"),
         ("Winner: Candidate 2\nConfidence: Low\nReasoning: Slightly better", "second"),
-        ("Winner: Tie\nConfidence: Medium\nReasoning: Both equal", "tie"),
+        ("Winner: Tie\nConfidence: Medium\nReasoning: Both equal", "tie"),  # Unrecognized → tie (retry logic in compare() handles this)
         ("Reasoning: A is cleaner and correct.\nWinner: Candidate 1\nConfidence: High", "first"),
     ]
     for response_text, expected_winner in test_cases:
@@ -175,18 +176,18 @@ def test_edge_cases():
     
     print("Test: Empty candidates")
     winner, _ = judge.compare("Test", "", "")
-    assert winner == "tie"
+    assert winner in ("a", "b"), "Must pick a winner even for empty candidates"
     print("  ✓ Empty candidates handled")
     
     print("Test: Very long candidates")
     long_text = "x" * 10000
     winner, _ = judge.compare("Test", long_text, "short")
-    assert winner in ("a", "b", "tie")
+    assert winner in ("a", "b")
     print("  ✓ Long candidates handled")
     
     print("Test: Special characters")
     winner, _ = judge.compare("Test", "def func(): return '\\n\\t\"quotes\"'", "def func(): return 'normal'")
-    assert winner in ("a", "b", "tie")
+    assert winner in ("a", "b")
     print("  ✓ Special characters handled")
     
     print("✓ Edge cases test passed\n")
@@ -204,7 +205,7 @@ def test_detailed_judgment():
     print(f"Confidence: {result.confidence}")
     
     assert isinstance(result, JudgmentResult)
-    assert result.winner in ("a", "b", "tie")
+    assert result.winner in ("a", "b"), "Ties are not allowed"
     assert 0.0 <= result.confidence <= 1.0
     
     result_dict = result.to_dict()
@@ -221,7 +222,7 @@ def run_all_tests():
         test_initialization,
         test_randomized_ordering,
         test_basic_comparison,
-        test_tie_handling,
+        test_no_ties,
         test_with_context,
         test_response_parsing,
         test_statistics_tracking,
