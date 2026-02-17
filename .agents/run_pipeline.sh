@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Multi-Agent Automated Pipeline
+# Two-agent pipeline: Implement, then Test.
 
 set -e
 
@@ -35,11 +35,11 @@ export PATH="${HOME}/.local/bin:${PATH}"
 BACKEND="${AGENT_BACKEND:-cursor}"
 
 # Commands for each backend
+# -f = full permissions (allows command execution)
 CLAUDE_CMD="claude -p --system-prompt-file"
 
 CURSOR_MODEL="${CURSOR_MODEL:-auto}"
-
-CURSOR_CMD="agent -p --output-format text --model ${CURSOR_MODEL}"
+CURSOR_CMD="${CURSOR_CMD:-agent -f -p --output-format text --model ${CURSOR_MODEL}}"
 
 run_agent() {
   local role_file="$1"   # e.g. .agents/01_implement.md
@@ -47,20 +47,23 @@ run_agent() {
 
   case "$BACKEND" in
     claude)
-      # Claude Code supports --system-prompt-file
       $CLAUDE_CMD "$role_file" "$task_prompt"
       ;;
 
     cursor)
-      # Cursor CLI: no --system-prompt-file, so inline the role prompt
       local prompt_content
       prompt_content="$(cat "$role_file")"
+      # Escape so any " in role file or task prompt don't break the outer quoted string
+      local safe_content safe_task
+      safe_content="${prompt_content//\\/\\\\}"
+      safe_content="${safe_content//\"/\\\"}"
+      safe_task="${task_prompt//\\/\\\\}"
+      safe_task="${safe_task//\"/\\\"}"
 
-      # We pass the role instructions + original task together as a single prompt
-      $CURSOR_CMD "$prompt_content
+      $CURSOR_CMD "$safe_content
 
 Original Human Task Prompt:
-$task_prompt"
+$safe_task"
       ;;
 
     *)
@@ -82,18 +85,10 @@ echo "=== Agent 1: Implement =================================="
 run_agent "$AGENTS_DIR/01_implement.md" "$TASK_PROMPT"
 
 echo ""
-echo "=== Agent 2: Correctness Review =========================="
-run_agent "$AGENTS_DIR/02_correctness_review.md" "$TASK_PROMPT"
-
-echo ""
-echo "=== Agent 3: Simplification =============================="
-run_agent "$AGENTS_DIR/03_simplify.md" "$TASK_PROMPT"
-
-echo ""
-echo "=== Agent 4: Final Correctness Check ====================="
-run_agent "$AGENTS_DIR/04_final_check.md" "$TASK_PROMPT"
+echo "=== Agent 2: Test Runner ================================="
+run_agent "$AGENTS_DIR/02_test_runner.md" "$TASK_PROMPT"
 
 echo ""
 echo "===================================================="
-echo "Pipeline complete. Review the git diff before committing."
+echo "Pipeline complete."
 echo "===================================================="

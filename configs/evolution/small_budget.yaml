@@ -3,14 +3,41 @@ evo_config:
   patch_types:
     - "diff"
     - "full"
+    - "cross"
   patch_type_probs:
-    - 0.5
-    - 0.5
-  num_generations: 20
+    - 0.6
+    - 0.3
+    - 0.1
+  num_generations: 100
   max_parallel_jobs: 1
-  max_patch_attempts: 10
+  max_patch_resamples: 3
+  max_patch_attempts: 3
   llm_models:
-    - "gpt-4o-2024-08-06"
-  llm_dynamic_selection: null
+#    - "gpt-4.1-nano"
+#    - "gpt-5-nano"
+#    - "gpt-4o-mini"
+#    - "gpt-5.1-codex"
+#    - "bedrock/us.anthropic.claude-sonnet-4-20250514-v1:0"
+    - "deepseek-reasoner"
+#    - "local-Qwen/Qwen3-14B-AWQ-http://elisa:8765/v1/"
+    - "openrouter-qwen/qwen3-coder-30b-a3b-instruct"
+#    - "openrouter-qwen/qwen3-32b"
+    - "openrouter-qwen/qwen3-30b-a3b"
+    - "openrouter-qwen/qwen3-30b-a3b-thinking-2507"
+  llm_dynamic_selection: ucb
+  llm_kwargs:
+    temperatures:
+      - 0.0
+      - 0.5
+      - 0.7
+#    max_tokens: 16384
+    max_tokens: 8192
+  meta_rec_interval: 10
+  meta_llm_models:
+    - "deepseek-reasoner"
+  meta_llm_kwargs:
+    temperatures:
+      - 0.0
   embedding_model: "text-embedding-3-small"
   results_dir: ${output_dir}
+  

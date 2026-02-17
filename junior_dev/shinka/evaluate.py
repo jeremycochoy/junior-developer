@@ -39,9 +39,9 @@ RANDOM_FRACTION = 0.3
 QUARTILE_FRACTION = 0.4
 
 DEFAULT_TASK_SPEC = "Refactor and improve the code quality"
-DEFAULT_JUDGE_MODEL = "gpt-4o-2024-08-06"
+DEFAULT_JUDGE_MODEL = "deepseek-reasoner"
 DEFAULT_NUM_COMPARISONS = 10
-DEFAULT_AGENT_TIMEOUT = 600
+DEFAULT_AGENT_TIMEOUT = 7200
 DEFAULT_BRANCH_PREFIX = "candidate_"
 DEFAULT_BRANCH = "master"
 
@@ -137,7 +137,7 @@ def _load_json_program(program_path: Path, candidate_id: str) -> Tuple[str, str,
 
     raw = program_path.read_text(encoding="utf-8")
     json_str = _extract_json_from_evolve_block(raw)
-    data = json.loads(json_str)
+    data = json.loads(json_str, strict=False)
 
     evolved_prompt = data.get("prompt", "")
     if not evolved_prompt:
@@ -527,6 +527,12 @@ def evaluate_coding_agent_prompt(
         engine = BTMMScoringEngine(db_path=settings["bt_db_path"])
         judge = PairwiseJudge(llm_model=settings["llm_judge_model"], temperature=settings["judge_temperature"])
 
+        judge_log_path = Path(results_dir) / "judge_log.txt"
+        judge_log = open(judge_log_path, "w")
+        judge.log_file = judge_log
+        if verbose:
+            print(f"Judge detailed log: {judge_log_path}")
+
         phase1_opponents, n_neighbors = _select_opponents(engine, candidate_id, settings["num_comparisons"])
 
         if verbose:
@@ -549,6 +555,8 @@ def evaluate_coding_agent_prompt(
         )
         wins += w2
         losses += l2
+
+        judge_log.close()
 
         if verbose:
             print(f"\nTotal: {wins}W-{losses}L")

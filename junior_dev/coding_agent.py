@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict
 from dataclasses import dataclass
 
-DEFAULT_AGENT_TIMEOUT_SECONDS = 600
+DEFAULT_AGENT_TIMEOUT_SECONDS = 7200
 POLL_INTERVAL_SECONDS = 0.1
 GIT_STATUS_TIMEOUT_SECONDS = 5
 THREAD_JOIN_TIMEOUT_SECONDS = 2

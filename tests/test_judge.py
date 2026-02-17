@@ -97,15 +97,16 @@ def test_response_parsing():
     
     judge = PairwiseJudge(llm_model="mock")
     test_cases = [
-        ("Winner: Candidate 1\nConfidence: High\nReasoning: Better", "first"),
-        ("Winner: Candidate 2\nConfidence: Low\nReasoning: Slightly better", "second"),
-        ("Winner: Tie\nConfidence: Medium\nReasoning: Both equal", "tie"),  # Unrecognized → tie (retry logic in compare() handles this)
-        ("Reasoning: A is cleaner and correct.\nWinner: Candidate 1\nConfidence: High", "first"),
+        ("explanation:First is better\ncandidate:first\nconfidence:0.9", "first", 0.9),
+        ("explanation:Second wins clearly\ncandidate:second\nconfidence:0.3", "second", 0.3),
+        ("Some random text with no structure", "tie", 0.5),  # Unparseable → tie
+        ("explanation:Reasoning here.\ncandidate:first\nconfidence:0.75", "first", 0.75),
     ]
-    for response_text, expected_winner in test_cases:
+    for response_text, expected_winner, expected_conf in test_cases:
         winner, reasoning, confidence = judge._parse_response(response_text)
-        print(f"  Parsed: {winner} (expected: {expected_winner})")
-        assert winner == expected_winner
+        print(f"  Parsed: winner={winner} (expected: {expected_winner}), confidence={confidence:.2f} (expected: {expected_conf:.2f})")
+        assert winner == expected_winner, f"Expected {expected_winner}, got {winner} for: {response_text}"
+        assert abs(confidence - expected_conf) < 0.01, f"Expected confidence {expected_conf}, got {confidence}"
     
     print("✓ Response parsing test passed\n")
 

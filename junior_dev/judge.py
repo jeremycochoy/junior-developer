@@ -13,18 +13,34 @@ except ImportError:
 
 SWAP_PROBABILITY = 0.5
 MAX_TIE_RETRIES = 2
-CONFIDENCE_MAP = {"high": 0.9, "medium": 0.6, "low": 0.3}
 MAX_CONTEXT_VALUE_LENGTH = 1000
-JUDGE_SYSTEM_PROMPT = """You are an expert software architect and code reviewer. You compare two **diffs** (patch/changes from a common base) and decide which, when applied, would **better achieve the evolution objective**.
 
-What you see: Each candidate is a **git-style diff** (lines starting with +/-, showing additions and deletions from the base). Do not treat them as full source files. Judge based on what the **resulting code would do** and how well it meets the objective.
+JUDGE_SYSTEM_PROMPT = """You are an expert software architect and code reviewer. You compare two diffs (patches from a common base branch) and decide which better achieves the stated evolution objective.
 
-Evaluation criteria (in order of importance): How well the **resulting change** fulfills the stated objective, correctness and completeness of the change, then code quality. Prefer the diff that leads to a better outcome (e.g. better game, requested features, clearer UX). Do NOT prefer a diff merely because it is shorter or has fewer lines—prefer the one that better achieves the goal. You MUST choose one winner—ties are not allowed.
+What you see: each candidate is a git-style diff (lines starting with +/- showing additions and deletions). Do not treat them as full source files. Judge based on what the resulting code would do and how well it meets the objective.
 
-Reply in this order (reasoning first, then verdict—this improves accuracy):
-1. Reasoning: [Your explanation of how each diff meets the evolution objective and which outcome is better]
-2. Winner: [Candidate 1 / Candidate 2]
-3. Confidence: [High / Medium / Low]"""
+Evaluation criteria (in order of importance):
+
+1. Faithfulness to the stated objective. The diff should do what was asked — no more, no less. Extra features, refactors, or changes beyond the scope of the objective are negatives, not positives, unless the objective is deliberately broad or abstract, in which case thoughtful interpretation and coverage of implied requirements is a strength.
+2. Correctness and completeness. The change should work correctly and handle the cases implied by the objective. A shorter diff that fully satisfies the objective is preferred over a longer one that also satisfies it — conciseness is a tiebreaker, not a primary criterion.
+3. Code quality. Readability, idiomatic style, appropriate abstractions, and maintainability.
+
+Key biases to avoid:
+- Do NOT prefer a diff because it is longer or touches more files. More code is not inherently better.
+- Do NOT reward scope creep. Unrequested features, defensive additions, or speculative generalization that go beyond the objective should count against a candidate.
+- Do NOT penalize a diff for being minimal if it fully achieves the objective.
+- DO reward a diff that interprets a vague or high-level objective thoughtfully, covering reasonable implied requirements without gold-plating.
+
+You MUST choose one winner — ties are not allowed. Even if both candidates are flawed or nearly equal, pick the one that is closer to the ideal change for the given objective.
+
+Respond in this exact format (plain text, no markdown):
+
+explanation:<your reasoning>
+candidate:<candidate>
+confidence:<confidence>
+
+Where <candidate> is exactly "first" or "second" (lowercase), <confidence> is a float between 0.0 and 1.0 reflecting how sure you are of your choice, and <your reasoning> explains your decision with reference to the criteria above.
+"""
 
 
 @dataclass
@@ -42,7 +58,7 @@ class JudgmentResult:
 
 class PairwiseJudge:
 
-    def __init__(self, llm_model: str = "gpt-4o-2024-08-06", system_prompt: Optional[str] = None,
+    def __init__(self, llm_model: str = "deepseek-reasoner", system_prompt: Optional[str] = None,
                  temperature: float = 0.0, max_tokens: int = 2000):
         self.llm_model = llm_model
         self.system_prompt = system_prompt or JUDGE_SYSTEM_PROMPT
@@ -55,6 +71,7 @@ class PairwiseJudge:
             self.llm = None
         self.total_comparisons = 0
         self.total_cost = 0.0
+        self.log_file = None  # set externally to write verbose output to a file
 
     def compare(self, task_spec: str, candidate_a: str, candidate_b: str,
                 context: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
@@ -66,18 +83,24 @@ class PairwiseJudge:
         cost = 0.0
         winner_presented = "tie"
         reasoning = ""
-        llm_response = ""
 
         for attempt in range(MAX_TIE_RETRIES):
             llm_response, cost = self._query_llm(user_prompt)
-            winner_presented, reasoning, _ = self._parse_response(llm_response)
+            winner_presented, reasoning, confidence = self._parse_response(llm_response)
 
+            self._log(f"\n--- Judge LLM Response (attempt {attempt + 1}) ---")
+            self._log(llm_response)
+            self._log(f"--- Parsed: winner={winner_presented}, confidence={confidence:.2f}, swapped={swapped} ---\n")
+
+            if winner_presented == "tie":
+                print(f"  [judge] Parse failed on attempt {attempt + 1}, retrying...")
             if winner_presented != "tie":
                 break
 
         if winner_presented == "tie":
             winner_presented = random.choice(["first", "second"])
-            reasoning = f"{reasoning}\n\n[Note: Judge failed to choose after {MAX_TIE_RETRIES} attempts; randomly selected winner]"
+            reasoning = f"{reasoning}\n\n[Note: Judge failed to parse after {MAX_TIE_RETRIES} attempts; randomly selected winner]"
+            print(f"  [judge] WARNING: Could not parse winner after {MAX_TIE_RETRIES} attempts, picked randomly")
 
         if swapped:
             winner = {"first": "b", "second": "a"}[winner_presented]
@@ -98,11 +121,16 @@ class PairwiseJudge:
         return JudgmentResult(
             winner=winner,
             reasoning=reasoning,
-            confidence=CONFIDENCE_MAP.get("medium", 0.6),
+            confidence=0.6,
             llm_response="",
             cost=cost_for_this_comparison,
             timestamp=time.time(),
         )
+
+    def _log(self, msg: str):
+        if self.log_file:
+            self.log_file.write(msg + "\n")
+            self.log_file.flush()
 
     def _query_llm(self, user_prompt: str) -> Tuple[str, float]:
         if self.llm:
@@ -119,16 +147,13 @@ class PairwiseJudge:
         if context and "evolution_objective" in context:
             objective = context["evolution_objective"]
 
-        prompt = f"""# Evolution objective (what the coding agent was asked to achieve)
-
+        prompt = f"""Evolution objective:
 {objective}
 
-# Candidate 1 (diff: changes from base)
-
+First candidate (diff from base):
 {first}
 
-# Candidate 2 (diff: changes from base)
-
+Second candidate (diff from base):
 {second}
 """
         if context:
@@ -136,51 +161,46 @@ class PairwiseJudge:
                 if key == "evolution_objective":
                     continue
                 if isinstance(value, str) and len(value) < MAX_CONTEXT_VALUE_LENGTH:
-                    prompt += f"\n# {key}\n{value}\n"
+                    prompt += f"\n{key}: {value}\n"
                 elif isinstance(value, (int, float, bool)):
-                    prompt += f"\n**{key}**: {value}\n"
+                    prompt += f"\n{key}: {value}\n"
 
         prompt += """
+Which diff, when applied to the base, would better achieve the evolution objective? Judge the outcome, not diff size.
 
-# Your task
+Formulate your judgment following this exact format:
 
-Each candidate above is a **diff** (patch). Which diff, when applied to the base, would **better achieve the evolution objective**? Judge the outcome (resulting behavior/features), not diff size. Reply in this order and format:
-1. Reasoning: [Your explanation of how each diff meets the objective and which outcome is better]
-2. Winner: [Candidate 1 / Candidate 2]
-3. Confidence: [High / Medium / Low]
-"""
+explanation:<your reasoning>
+candidate:<candidate>
+confidence:<confidence>
+
+Where <candidate> is replaced by exactly the word "first" or "second" (lowercase, no quotes), where <confidence> is a float between 0.0 and 1.0, and where <your reasoning> is a textual explanation of your decision. Respect the formatting (spaces, case, no markdown)."""
         return prompt
 
     def _parse_response(self, response: str) -> Tuple[str, str, float]:
-        reasoning = response
-        reasoning_match = re.search(r'Reasoning:\s*(.+?)(?=Winner:|Confidence:|\Z)', response, re.IGNORECASE | re.DOTALL)
-        if reasoning_match:
-            reasoning = reasoning_match.group(1).strip()
-
+        # Parse candidate: first|second
         winner = "tie"
-        winner_match = re.search(r'Winner:\s*(Candidate\s*1|Candidate\s*2)', response, re.IGNORECASE)
-        if winner_match:
-            winner_text = winner_match.group(1).lower()
-            winner = "first" if "1" in winner_text else "second"
-        else:
-            # Fallback: try to extract winner from reasoning text
-            if re.search(r'\bcandidate\s*1\b.*\bbetter\b', response, re.IGNORECASE):
-                winner = "first"
-            elif re.search(r'\bcandidate\s*2\b.*\bbetter\b', response, re.IGNORECASE):
-                winner = "second"
+        candidate_match = re.search(r'^candidate:\s*(first|second)\s*$', response, re.IGNORECASE | re.MULTILINE)
+        if candidate_match:
+            winner = candidate_match.group(1).lower()
 
-        confidence = CONFIDENCE_MAP["medium"]
-        confidence_match = re.search(r'Confidence:\s*(High|Medium|Low)', response, re.IGNORECASE)
+        # Parse confidence: float
+        confidence = 0.5
+        confidence_match = re.search(r'^confidence:\s*([0-9]*\.?[0-9]+)\s*$', response, re.IGNORECASE | re.MULTILINE)
         if confidence_match:
-            confidence = CONFIDENCE_MAP[confidence_match.group(1).lower()]
+            confidence = max(0.0, min(1.0, float(confidence_match.group(1))))
+
+        # Parse explanation: text (everything after "explanation:" until "candidate:" or end)
+        reasoning = response
+        explanation_match = re.search(r'^explanation:\s*(.+?)(?=^candidate:|\Z)', response, re.IGNORECASE | re.DOTALL | re.MULTILINE)
+        if explanation_match:
+            reasoning = explanation_match.group(1).strip()
 
         return winner, reasoning, confidence
 
     def _mock_llm_response(self) -> str:
-        winner_num = random.choice([1, 2])
-        return f"""Winner: Candidate {winner_num}
-Confidence: Low
-Reasoning: This is a mock response for testing. Cannot judge diffs without a real LLM; randomly selected winner."""
+        winner = random.choice(["first", "second"])
+        return f"explanation:Mock response for testing. Randomly selected winner.\ncandidate:{winner}\nconfidence:0.5"
 
     def get_statistics(self) -> Dict[str, Any]:
         return {
