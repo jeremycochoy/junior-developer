@@ -28,7 +28,14 @@ evo_config:
 
     If the parent branch selected isn't development, consider a prompt requiring an incremental improvement.
 
-    **Scoring:** Pairwise LLM judging compares code changes from different prompts.
+    **Scoring:** Pairwise LLM judging compares code changes from different prompts. The judge evaluates faithfulness to the stated objective — doing what was asked, no more, no less. Scope creep, unrequested features, and speculative generalization count AGAINST a candidate. A focused change that fully achieves its objective will outscore an ambitious one that tries to do too much.
+
+    **Critical — keep prompts focused and proportional:**
+    - Each prompt should describe ONE clear, achievable improvement — not a wishlist of changes.
+    - The coding agent has limited time and context. Overloaded prompts lead to partial execution, bugs, and lower scores.
+    - A well-scoped prompt that gets fully implemented beats an ambitious prompt that gets half-done.
+    - Avoid asking the agent to "refactor everything", "rewrite the entire module", or combine unrelated changes in a single prompt.
+    - Think of each prompt as a single pull request: it should have one clear purpose.
 
   language: "json"
   init_program_path: "junior_dev/shinka/initial_rnd.json"
