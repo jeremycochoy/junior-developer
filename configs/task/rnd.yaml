@@ -37,6 +37,8 @@ evo_config:
     - Avoid asking the agent to "refactor everything", "rewrite the entire module", or combine unrelated changes in a single prompt.
     - Think of each prompt as a single pull request: it should have one clear purpose.
 
+    In this task, the “code scripts” below refer to JSON configuration files rather than executable source code. The term “algorithm” denotes the agent’s configuration-defined behavior and decision logic, not a traditional implemented computational procedure.
+
   language: "json"
   init_program_path: "junior_dev/shinka/initial_rnd.json"
   job_type: "local"
