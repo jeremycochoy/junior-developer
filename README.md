@@ -9,6 +9,12 @@ Evolve coding agent prompts using genetic algorithms + LLM judging.
 3. **Judges results** - LLM compares code changes from different prompts
 4. **Ranks with BT-MM** - Bradley-Terry scoring in SQLite
 
+## Package Age Rule
+
+Do not install a PyPI, npm, Cargo or Go package version that is less than 7 days old. A new release can contain malware.
+Use this limit for each installation: `--uploaded-prior-to=P7D` with pip 26.1 or later, `exclude-newer = "7 days"` with uv, and `min-release-age=7` with npm 11.10 or later.
+Stable Cargo and Go have no such setting. For each new or updated crate or Go module, the author checks its release date, and the reviewer refuses a version that is less than 7 days old.
+
 ## Quick Start
 
 ### 1. Install
@@ -18,8 +24,9 @@ git clone <repo>
 cd JuniorDeveloper
 python -m venv venv
 source venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
+pip install pip==26.2.2
+pip install --uploaded-prior-to=P7D -r requirements.txt
+pip install --uploaded-prior-to=P7D -e .
 ```
 
 ### 2. Set API Keys
